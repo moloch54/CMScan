@@ -1897,6 +1897,7 @@ def scan(target: str, csv_out: str) -> ScanResult:
 # ── Entry point ────────────────────────────────────────────────────────────
 def main():
     auto_update()
+    auto_update()
     print(BANNER)
     parser = argparse.ArgumentParser(description="CMScan — Unified CMS Scanner")
     parser.add_argument("-L", metavar="TARGET|FILE", required=False,
