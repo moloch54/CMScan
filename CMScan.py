@@ -74,7 +74,7 @@ try:
 except ImportError:
     HAS_PKG_VERSION = False
 
-VERSION = "3.0"
+with open("version.txt", "r") as f: VERSION = f.read().strip()
 
 # ── Couleurs ──────────────────────────────────────────────────────────
 class C:
