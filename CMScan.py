@@ -36,36 +36,32 @@ RESET = "\033[0m"
 import signal
 
 def auto_update():
-    """Vérifie automatiquement les mises à jour via version.txt sur GitHub."""
     if not os.path.exists(".git"):
         return
     try:
         import subprocess
         import urllib.request
-        # Récupère la version distante
-        remote_url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
-        with urllib.request.urlopen(remote_url, timeout=3) as response:
+        import time
+        url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
+        with urllib.request.urlopen(url, timeout=3) as response:
             remote_version = response.read().decode('utf-8').strip()
-        # Lire la version locale
         with open("version.txt", "r") as f:
             local_version = f.read().strip()
         if local_version != remote_version:
-            print("\n" + "="*60)
-            print(f"[+] Nouvelle version disponible : {remote_version} (actuelle : {local_version})")
-            print("[*] Téléchargement de la mise à jour...")
-            # On fait un git pull
+            # Utiliser les couleurs de la classe C
+            print(f"\n{C.CYAN}{'='*66}{C.RST}")
+            print(f"{C.GREEN}{C.BOLD}[+] Nouvelle version disponible : {remote_version} (actuelle : {local_version}){C.RST}")
+            print(f"{C.CYAN}[*] Téléchargement de la mise à jour...{C.RST}")
+            subprocess.run(["git", "reset", "--hard", "origin/main"], check=True, capture_output=True)
             subprocess.run(["git", "pull", "--quiet"], check=True)
-            # On relit la version locale après le pull
             with open("version.txt", "r") as f:
                 new_version = f.read().strip()
-            print(f"[✓] Mise à jour vers la version {new_version} effectuée !")
-            print("[*] Redémarrage du script...")
-            print("="*60 + "\n")
+            print(f"{C.GREEN}{C.BOLD}[✓] Mise à jour vers la version {new_version} effectuée !{C.RST}")
+            print(f"{C.CYAN}[*] Redémarrage du script...{C.RST}")
+            print(f"{C.CYAN}{'='*66}{C.RST}\n")
             time.sleep(1)
-            # On relance le script
             os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception as e:
-        # On ignore l'erreur silencieusement pour ne pas bloquer le script
+    except Exception:
         pass
         
 def signal_handler(sig, frame):
@@ -1907,12 +1903,10 @@ def scan(target: str, csv_out: str) -> ScanResult:
 
 # ── Entry point ────────────────────────────────────────────────────────────
 def main():
-    auto_update()
-    with open("version.txt", "r") as f: VERSION = f.read().strip()
     global VERSION
     auto_update()
-    with open("version.txt", "r") as f: VERSION = f.read().strip()
-    global VERSION
+    with open("version.txt", "r") as f:
+        VERSION = f.read().strip()
     print(BANNER)
     parser = argparse.ArgumentParser(description="CMScan — Unified CMS Scanner")
     parser.add_argument("-L", metavar="TARGET|FILE", required=False,
