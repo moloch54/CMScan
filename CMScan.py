@@ -36,32 +36,37 @@ RESET = "\033[0m"
 import signal
 
 def auto_update():
+    """Vérifie automatiquement les mises à jour via version.txt sur GitHub."""
     if not os.path.exists(".git"):
         return
     try:
         import subprocess
         import urllib.request
-        import time
-        url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
-        with urllib.request.urlopen(url, timeout=3) as response:
+        # Récupère la version distante
+        remote_url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
+        with urllib.request.urlopen(remote_url, timeout=3) as response:
             remote_version = response.read().decode('utf-8').strip()
+        # Lire la version locale
         with open("version.txt", "r") as f:
             local_version = f.read().strip()
         if local_version != remote_version:
-            print(f"\n{'='*66}")
+            print("\n" + "="*60)
             print(f"[+] Nouvelle version disponible : {remote_version} (actuelle : {local_version})")
-            print(f"[*] Téléchargement de la mise à jour...")
+            print("[*] Téléchargement de la mise à jour...")
+            # On fait un git pull
             subprocess.run(["git", "pull", "--quiet"], check=True)
+            # On relit la version locale après le pull
             with open("version.txt", "r") as f:
                 new_version = f.read().strip()
             print(f"[✓] Mise à jour vers la version {new_version} effectuée !")
-            print(f"[*] Redémarrage du script...")
-            print(f"{'='*66}\n")
+            print("[*] Redémarrage du script...")
+            print("="*60 + "\n")
             time.sleep(1)
+            # On relance le script
             os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception:
+    except Exception as e:
+        # On ignore l'erreur silencieusement pour ne pas bloquer le script
         pass
-
         
 def signal_handler(sig, frame):
     print("\n\n  Interruption reçue, arrêt immédiat...")
