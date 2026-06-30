@@ -14,6 +14,7 @@ from lib.http import get, normalize_url, _cmseek_getsource, USER_AGENTS
 from lib.meta import extract_meta
 from lib.headers import audit_headers, display_headers_info
 from lib.vuln import update_friendsofphp_db
+from lib.csv_export import export_csv
 
 def auto_update():
     """Vérifie automatiquement les mises à jour sur GitHub et se relance si nécessaire."""
@@ -405,6 +406,8 @@ def scan(target, csv_out):
     print(f"  {C.ORANGE}Header issues       : {len(headers_issues)}{C.RST}")
     if result.version:
         print(f"  {C.GREEN}{result.cms.capitalize()} version : {result.version}{C.RST}")
+    export_csv(result, csv_out)
+    print(f"{C.DIM}→ Results appended to {csv_out}{C.RST}")
     print("")
 
 def main():
