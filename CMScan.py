@@ -36,26 +36,30 @@ RESET = "\033[0m"
 import signal
 
 def auto_update():
-    with open("version.txt", "r") as f: VERSION = f.read().strip()
-    global VERSION
-    """Vérifie automatiquement les mises à jour via le fichier version.txt sur GitHub."""
     if not os.path.exists(".git"):
         return
     try:
-        import urllib.request
         import subprocess
+        import urllib.request
+        import time
         url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
         with urllib.request.urlopen(url, timeout=3) as response:
             remote_version = response.read().decode('utf-8').strip()
         with open("version.txt", "r") as f:
             local_version = f.read().strip()
         if local_version != remote_version:
-            print(f"\n[+] Nouvelle version disponible : {remote_version} (actuelle : {local_version})")
-            print("[*] Téléchargement de la mise à jour...")
+            print(f"\n{'='*66}")
+            print(f"[+] Nouvelle version disponible : {remote_version} (actuelle : {local_version})")
+            print(f"[*] Téléchargement de la mise à jour...")
             subprocess.run(["git", "pull", "--quiet"], check=True)
-            print("[+] Mise à jour terminée, redémarrage...\n")
+            with open("version.txt", "r") as f:
+                new_version = f.read().strip()
+            print(f"[✓] Mise à jour vers la version {new_version} effectuée !")
+            print(f"[*] Redémarrage du script...")
+            print(f"{'='*66}\n")
+            time.sleep(1)
             os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception as e:
+    except Exception:
         pass
 
         
