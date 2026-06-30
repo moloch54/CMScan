@@ -1903,11 +1903,15 @@ def scan(target: str, csv_out: str) -> ScanResult:
 
 # ── Entry point ────────────────────────────────────────────────────────────
 def main():
-    global VERSION
     auto_update()
     with open("version.txt", "r") as f:
-        VERSION = f.read().strip()
-    print(BANNER)
+        local_version = f.read().strip()
+    banner = f"""
+{C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
+║   CMScan v{local_version} — Unified CMS Security Scanner          ║
+║   Augmented CyberSecurity                                ║
+╚══════════════════════════════════════════════════════════╝{C.RST}"""
+    print(banner)
     parser = argparse.ArgumentParser(description="CMScan — Unified CMS Scanner")
     parser.add_argument("-L", metavar="TARGET|FILE", required=False,
                         help="Single domain or file with one domain per line")
@@ -1926,7 +1930,7 @@ def main():
     args = parser.parse_args()
 
     if args.version:
-        print(f"CMScan version {VERSION}")
+        print(f"CMScan version {local_version}")
         sys.exit(0)
 
     global VERBOSE, CUSTOM_HOST
