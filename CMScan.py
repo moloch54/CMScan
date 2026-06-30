@@ -36,6 +36,8 @@ RESET = "\033[0m"
 import signal
 
 def auto_update():
+    with open("version.txt", "r") as f: VERSION = f.read().strip()
+    global VERSION
     """Vérifie automatiquement les mises à jour via le fichier version.txt sur GitHub."""
     if not os.path.exists(".git"):
         return
@@ -1897,7 +1899,11 @@ def scan(target: str, csv_out: str) -> ScanResult:
 # ── Entry point ────────────────────────────────────────────────────────────
 def main():
     auto_update()
+    with open("version.txt", "r") as f: VERSION = f.read().strip()
+    global VERSION
     auto_update()
+    with open("version.txt", "r") as f: VERSION = f.read().strip()
+    global VERSION
     print(BANNER)
     parser = argparse.ArgumentParser(description="CMScan — Unified CMS Scanner")
     parser.add_argument("-L", metavar="TARGET|FILE", required=False,
