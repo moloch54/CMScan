@@ -308,15 +308,41 @@ def detect_cms(base):
         version = _extract_wp_version(base)
         return {"cms": "wordpress", "version": version, "html": r_readme.text, "resp_headers": r_readme.headers}
 
-    # c) Page d'accueil (get simple)
+    # c) Page d'accueil (get simple) avec filtrage des domaines externes
     r_home = get(base)
     if r_home and r_home.status_code == 200:
         html = r_home.text
-        if "wp-content" in html or "wp-includes" in html or "wp-json" in html:
-            print("[DEBUG] WordPress détecté via page d'accueil")
-            version = _extract_wp_version(base)
-            return {"cms": "wordpress", "version": version, "html": html, "resp_headers": r_home.headers}
-
+        from urllib.parse import urlparse
+        target_domain = urlparse(base).netloc
+        wp_signals = ["wp-content", "wp-includes", "wp-json"]
+        found = False
+        for sig in wp_signals:
+            if sig in html:
+                # Vérifier si le signal est dans une URL externe
+                idx = html.find(sig)
+                # Extraire le contexte autour du signal (300 caractères)
+                context = html[max(0, idx-100):min(len(html), idx+200)]
+                # Chercher une URL complète dans le contexte
+                url_match = re.search(r'(https?://[^\s"\']+)', context)
+                if url_match:
+                    full_url = url_match.group(1)
+                    url_domain = urlparse(full_url).netloc
+                    # Si le domaine est différent du domaine cible, ignorer
+                    if url_domain and url_domain != target_domain:
+                        print(f"[DEBUG] {sig} trouvé dans une URL externe ({url_domain}), ignoré")
+                        continue
+                # Si on arrive ici, le signal est valide (même domaine ou pas d'URL)
+                found = True
+                print(f"[DEBUG] WordPress détecté via page d'accueil (signal: {sig})")
+                start = max(0, idx - 30)
+                end = min(len(html), idx + len(sig) + 30)
+                excerpt = html[start:end].replace('\n', ' ').strip()
+                print(f"[DEBUG]     Extrait: ...{excerpt}...")
+                version = _extract_wp_version(base)
+                return {"cms": "wordpress", "version": version, "html": html, "resp_headers": r_home.headers}
+        if not found:
+            print("[DEBUG] Page d'accueil : aucun signal WordPress valide (même domaine) trouvé")
+            
     # ── 2. Pour les autres CMS (Drupal, Joomla, PrestaShop) ──
     print("[DEBUG] Pas de WordPress, tentative Drupal/Joomla/PrestaShop")
     html, headers = get_html(base)
