@@ -65,6 +65,7 @@ BANNER = f"""
 # 1. RÉCUPÉRATION DU HTML (fallback Playwright)
 # ──────────────────────────────────────────────────────────────
 def get_html(base):
+    # 1. Essayer avec get() (requests)
     r = get(base)
     if r and r.status_code == 200:
         html = r.text
@@ -72,6 +73,7 @@ def get_html(base):
         if 'sgcaptcha' not in html and 'challenge' not in html:
             return html, headers
 
+    # 2. Fallback avec _cmseek_getsource (urllib.request, pas Playwright)
     ua = random.choice(USER_AGENTS)
     src = _cmseek_getsource(base, ua)
     if src[0] == '1':
