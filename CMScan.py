@@ -36,25 +36,26 @@ RESET = "\033[0m"
 import signal
 
 def auto_update():
-    """Vérifie automatiquement les mises à jour sur GitHub et se relance si nécessaire."""
+    """Vérifie automatiquement les mises à jour via le fichier version.txt sur GitHub."""
     if not os.path.exists(".git"):
-        return  # Pas un dépôt git, on ignore
+        return
     try:
+        import urllib.request
         import subprocess
-        # Récupérer la dernière version distante (tag)
-        subprocess.run(["git", "fetch", "--tags", "--quiet"], check=True, capture_output=True)
-        current = subprocess.run(["git", "describe", "--tags", "--abbrev=0"], capture_output=True, text=True).stdout.strip()
-        remote = subprocess.run(["git", "describe", "--tags", "--abbrev=0", "origin/main"], capture_output=True, text=True).stdout.strip()
-        if current != remote:
-            print(f"\n[+] Nouvelle version disponible : {remote} (actuelle : {current})")
+        url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
+        with urllib.request.urlopen(url, timeout=3) as response:
+            remote_version = response.read().decode('utf-8').strip()
+        with open("version.txt", "r") as f:
+            local_version = f.read().strip()
+        if local_version != remote_version:
+            print(f"\n[+] Nouvelle version disponible : {remote_version} (actuelle : {local_version})")
             print("[*] Téléchargement de la mise à jour...")
             subprocess.run(["git", "pull", "--quiet"], check=True)
             print("[+] Mise à jour terminée, redémarrage...\n")
-            # Relancer le script avec les mêmes arguments
             os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
-        # Silencieux en cas d'erreur (pas de blocage)
         pass
+
         
 def signal_handler(sig, frame):
     print("\n\n  Interruption reçue, arrêt immédiat...")
