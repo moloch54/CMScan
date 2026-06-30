@@ -101,14 +101,14 @@ class JoomlaModule(BaseModule):
             warn("No known vulnerabilities found for this version")
             return
 
-          # Dédoublonner par CVE
+        # Dédoublonner par CVE
         seen = {}
         for v in all_vulns:
             key = v.cve if v.cve else v.id
             if key not in seen:
                 seen[key] = v
 
-        # Trier par sévérité (CRITICAL -> HIGH -> MEDIUM -> LOW -> UNKNOWN)
+        # Trier par sévérité
         severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNKNOWN": 4}
         sorted_vulns = sorted(seen.values(), key=lambda x: severity_order.get(x.severity, 4))
 
