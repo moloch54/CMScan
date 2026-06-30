@@ -26,4 +26,5 @@ Il détecte les versions, énumère les utilisateurs, vérifie les vulnérabilit
 ```bash
 git clone https://github.com/moloch54/CMScan
 cd CMScan
+chmod +x install.sh
 ./install.sh
