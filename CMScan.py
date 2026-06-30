@@ -1908,7 +1908,7 @@ def main():
         local_version = f.read().strip()
     banner = f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
-║   CMScan v{local_version} — Unified CMS Security Scanner          ║
+║   CMScan v{local_version} — Unified CMS Security Scanner             ║
 ║   Augmented CyberSecurity                                ║
 ╚══════════════════════════════════════════════════════════╝{C.RST}"""
     print(banner)
@@ -1994,7 +1994,7 @@ def main():
         print(f"  {C.RED}Total Critical/High : {total_c}{C.RST}")
         print(f"  {C.WHITE}Total vulns         : {total_v}{C.RST}")
         print(f"  {C.GREEN}CSV report          : {csv_out}{C.RST}\n")
-        
+
 def self_update():
     """Met à jour le script depuis GitHub."""
     if not os.path.exists(".git"):
