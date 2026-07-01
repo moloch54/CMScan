@@ -15,6 +15,7 @@ from lib.meta import extract_meta
 from lib.headers import audit_headers, display_headers_info
 from lib.vuln import update_friendsofphp_db
 from lib.csv_export import export_csv
+VERBOSE = False
 
 def auto_update():
     """Vérifie automatiquement les mises à jour sur GitHub et se relance si nécessaire."""
@@ -303,12 +304,19 @@ def detect_cms(base):
         headers = r_home.headers if r_home else {}
         return {"cms": "wordpress", "version": version, "html": html, "resp_headers": headers}
 
-    # b) /readme.html
+        # b) /readme.html
     r_readme = get(base + "/readme.html")
     if r_readme and r_readme.status_code == 200 and "WordPress" in r_readme.text:
-        print("[DEBUG] WordPress détecté via /readme.html")
+        if VERBOSE:
+            print("[DEBUG] WordPress détecté via /readme.html")
         version = _extract_wp_version(base)
-        return {"cms": "wordpress", "version": version, "html": r_readme.text, "resp_headers": r_readme.headers}
+        # Récupérer la page d'accueil pour les métadonnées (emails, auteurs)
+        r_home = get(base)
+        home_html = r_home.text if r_home and r_home.status_code == 200 else ""
+        home_headers = r_home.headers if r_home else {}
+        if VERBOSE:
+            print(f"[DEBUG] Page d'accueil récupérée: {len(home_html)} caractères")
+        return {"cms": "wordpress", "version": version, "html": home_html, "resp_headers": home_headers}
 
     # c) Page d'accueil (get simple) avec filtrage des domaines externes
     r_home = get(base)
@@ -445,6 +453,9 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode")
     parser.add_argument("--update", action="store_true", help="Update vulnerability databases")
     args = parser.parse_args()
+    global VERBOSE
+    if args.verbose:
+        VERBOSE = True
     auto_update()
     if args.update:
         print("[*] Updating vulnerability databases...")

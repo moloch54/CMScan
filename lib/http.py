@@ -28,9 +28,22 @@ def get(url, **kw):
 
 def _cmseek_getsource(url, ua):
     try:
-        ckreq = urllib.request.Request(
+        # 1. Essayer curl_cffi (si disponible)
+        try:
+            from curl_cffi import requests as cffi_requests
+            r = cffi_requests.get(url, impersonate="chrome120", timeout=10, verify=False)
+            if r.status_code == 200:
+                return ('1', r.text, str(r.headers), r.url)
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+        # 2. Fallback sur urllib.request avec ssl
+        import ssl
+        context = ssl._create_unverified_context()
+        req = urllib.request.Request(
             url,
-            data=None,
             headers={
                 'User-Agent': ua,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -39,13 +52,11 @@ def _cmseek_getsource(url, ua):
                 'Connection': 'keep-alive'
             }
         )
-        cj = CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-        with opener.open(ckreq, timeout=8) as response:
-            source = response.read().decode('utf-8', errors='ignore')
-            headers = str(response.info())
-            final_url = response.geturl()
-            return ('1', source, headers, final_url)
+        response = urllib.request.urlopen(req, timeout=10, context=context)
+        source = response.read().decode('utf-8', errors='ignore')
+        headers = str(response.info())
+        final_url = response.geturl()
+        return ('1', source, headers, final_url)
     except Exception as e:
         return ('0', str(e), '', '')
 

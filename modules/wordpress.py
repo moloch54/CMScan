@@ -10,6 +10,8 @@ from lib.http import get, _cmseek_getsource
 from lib.paths import check_paths, WP_SENSITIVE_PATHS
 from lib.vuln import check_vulns_friendsofphp
 from modules.base import BaseModule, Vuln
+from CMScan import VERBOSE
+import urllib.request
 
 class WordPressModule(BaseModule):
     def __init__(self, base_url, cms_info):
@@ -197,12 +199,11 @@ class WordPressModule(BaseModule):
                     fixed_version=display_max,
                     package=os.path.basename(path)
                 ))
-        except Exception as e:
+        except Exception:
             pass
 
         # 2. Récupérer les vulns FriendsOfPHP (toujours)
         from lib.vuln import check_vulns_friendsofphp
-        # Déterminer le package en fonction du chemin
         if 'core' in path:
             package = 'wordpress/wordpress'
         elif 'plugin' in path:
@@ -226,26 +227,90 @@ class WordPressModule(BaseModule):
         return order.get(sev, 4)
 
     def _harvest_usernames_wp(self):
+        import requests
         usernames = set()
         ua = random.choice(["Mozilla/5.0"])
-        src = _cmseek_getsource(self.base + "/wp-json/wp/v2/users", ua)
-        if src[0] == "1" and "slug" in src[1]:
-            try:
-                for u in json.loads(src[1]):
-                    usernames.add(u.get("slug", ""))
-            except: pass
+        print(f"[DEBUG] _harvest_usernames_wp: début pour {self.base}")
+
+        # Session partagée pour toutes les requêtes
+        session = requests.Session()
+        session.headers.update({"User-Agent": ua})
+        session.verify = False
+
+        # 1. API REST
+        print("[DEBUG]   → Source 1: wp-json API")
+        try:
+            r = session.get(self.base + "/wp-json/wp/v2/users", timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                for user in data:
+                    slug = user.get("slug", "")
+                    if slug:
+                        usernames.add(slug)
+                        print(f"    {C.GREEN}[+]{C.RST} Found user from wp-json: {C.BOLD}{slug}{C.RST}")
+                print(f"[DEBUG]   → wp-json OK, {len(data)} utilisateurs")
+            else:
+                print(f"[DEBUG]   → wp-json échoué (status {r.status_code})")
+        except Exception as e:
+            print(f"[DEBUG]   → wp-json exception: {e}")
+
+        # 2. ?author= redirection (séquentiel, timeout 4s)
+        print("[DEBUG]   → Source 2: ?author= redirection (1 à 20)")
         for i in range(1, 21):
-            src = _cmseek_getsource(self.base + f"/?author={i}", ua)
-            if src[0] == "1":
-                url = src[3]
-                if "/author/" in url:
-                    m = re.search(r"/author/([^/]+)/", url)
-                    if m:
-                        usernames.add(m.group(1))
-        src = _cmseek_getsource(self.base + "/feed", ua)
-        if src[0] == "1":
-            for m in re.findall(r"<dc:creator>([^<]+)<", src[1]):
-                usernames.add(m.strip())
+            try:
+                r = session.get(self.base + f"/?author={i}", timeout=4, allow_redirects=True)
+                if r.status_code == 200:
+                    final_url = r.url
+                    if "/author/" in final_url:
+                        m = re.search(r"/author/([^/]+)/", final_url)
+                        if m:
+                            username = m.group(1)
+                            if username not in usernames:
+                                usernames.add(username)
+                                print(f"    {C.GREEN}[+]{C.RST} Found user from ?author={i}: {C.BOLD}{username}{C.RST}")
+                            continue
+                    if "/author/" in r.text:
+                        m = re.search(r"/author/([^/]+)/", r.text)
+                        if m:
+                            username = m.group(1)
+                            if username not in usernames:
+                                usernames.add(username)
+                                print(f"    {C.GREEN}[+]{C.RST} Found user from ?author={i} (source): {C.BOLD}{username}{C.RST}")
+                            continue
+                elif r.status_code == 302:
+                    location = r.headers.get("Location", "")
+                    if "/author/" in location:
+                        m = re.search(r"/author/([^/]+)/", location)
+                        if m:
+                            username = m.group(1)
+                            if username not in usernames:
+                                usernames.add(username)
+                                print(f"    {C.GREEN}[+]{C.RST} Found user from ?author={i} (Location): {C.BOLD}{username}{C.RST}")
+                            continue
+            except Exception as e:
+                if i <= 3:
+                    print(f"[DEBUG]   → ?author={i} échec: {e}")
+
+        # 3. Feed RSS
+        print("[DEBUG]   → Source 3: feed RSS")
+        try:
+            r = session.get(self.base + "/feed", timeout=5)
+            if r.status_code == 200:
+                feed_users = re.findall(r"<dc:creator>([^<]+)<", r.text)
+                if not feed_users:
+                    feed_users = re.findall(r"<dc:creator>\s*<!\[CDATA\[([^\]]+)\]\]>", r.text)
+                print(f"[DEBUG]   → Feed RSS OK, {len(feed_users)} utilisateurs")
+                for username in feed_users:
+                    username = username.strip()
+                    if username and username not in usernames:
+                        usernames.add(username)
+                        print(f"    {C.GREEN}[+]{C.RST} Found user from feed: {C.BOLD}{username}{C.RST}")
+            else:
+                print(f"[DEBUG]   → Feed RSS échoué (status {r.status_code})")
+        except Exception as e:
+            print(f"[DEBUG]   → Feed RSS exception: {e}")
+
+        print(f"[DEBUG] _harvest_usernames_wp: fin, {len(usernames)} utilisateur(s)")
         return {u for u in usernames if u}
 
     def _wp_slugs_from_html(self, html, kind):
