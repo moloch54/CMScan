@@ -1,6 +1,24 @@
 import csv
 import os
+import re
+from datetime import datetime
+from urllib.parse import urlparse
 
+def sanitize_filename(name):
+    """Nettoie une chaîne pour en faire un nom de fichier valide."""
+    return re.sub(r'[^a-zA-Z0-9._-]', '_', name)[:50]
+
+def generate_csv_filename(target, base_name="cmscan"):
+    """Génère un nom de fichier CSV avec site + date/heure."""
+    parsed = urlparse(target)
+    domain = parsed.netloc or target
+    domain = domain.replace('www.', '').split(':')[0]
+    domain = sanitize_filename(domain)
+    if not domain:
+        domain = "unknown"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{base_name}_{domain}_{timestamp}.csv"
+    
 def export_csv(res, outfile):
     rows = []
     for v in res.vulns:

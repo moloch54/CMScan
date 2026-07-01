@@ -453,10 +453,12 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode")
     parser.add_argument("--update", action="store_true", help="Update vulnerability databases")
     args = parser.parse_args()
+
     global VERBOSE
     if args.verbose:
         VERBOSE = True
     auto_update()
+
     if args.update:
         print("[*] Updating vulnerability databases...")
         update_friendsofphp_db()
@@ -467,7 +469,12 @@ def main():
         sys.exit(1)
 
     target = args.L
-    csv_out = args.output or "cmscan_report.csv"
+    if args.output:
+        csv_out = args.output
+    else:
+        from lib.csv_export import generate_csv_filename
+        csv_out = generate_csv_filename(target)
+
     scan(target, csv_out)
 
 if __name__ == "__main__":
