@@ -73,7 +73,6 @@ echo -e "${GREEN}[+]${RESET} Dépendances installées"
 if [ -f "CMScan.py" ]; then
     chmod +x CMScan.py
     echo -e "${GREEN}[+]${RESET} CMScan.py rendu exécutable"
-    # Créer un lien symbolique pour compatibilité
     ln -sf CMScan.py cmscan.py
     echo -e "${GREEN}[+]${RESET} Lien créé : cmscan.py -> CMScan.py"
 else
@@ -112,13 +111,6 @@ fi
 cd ..
 echo -e "${GREEN}[+]${RESET} Base FriendsOfPHP prête"
 
-# ── Lien symbolique (optionnel) ──────────────────────────────────
-if [ -d "/usr/local/bin" ]; then
-    echo -e "${CYAN}[*]${RESET} Création du lien symbolique..."
-    sudo ln -sf "$(pwd)/CMScan.py" /usr/local/bin/cmscan
-    echo -e "${GREEN}[+]${RESET} Lien créé : ${YELLOW}cmscan${RESET}"
-fi
-
 # ── Final ────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}"
@@ -128,5 +120,4 @@ echo ""
 echo -e "  ${CYAN}Lancer CMScan :${RESET}"
 echo -e "    ${YELLOW}./CMScan.py${RESET} ${CYAN}-L target.com${RESET}"
 echo -e "    ${YELLOW}./cmscan.py${RESET} ${CYAN}-L target.com${RESET} (alias)"
-echo -e "    ${YELLOW}cmscan${RESET} ${CYAN}-L target.com${RESET} (si lien créé)"
 echo ""

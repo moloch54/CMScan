@@ -291,25 +291,32 @@ class WordPressModule(BaseModule):
                 if i <= 3:
                     print(f"[DEBUG]   → ?author={i} échec: {e}")
 
-        # 3. Feed RSS
-        print("[DEBUG]   → Source 3: feed RSS")
-        try:
-            r = session.get(self.base + "/feed", timeout=5)
-            if r.status_code == 200:
-                feed_users = re.findall(r"<dc:creator>([^<]+)<", r.text)
-                if not feed_users:
-                    feed_users = re.findall(r"<dc:creator>\s*<!\[CDATA\[([^\]]+)\]\]>", r.text)
-                print(f"[DEBUG]   → Feed RSS OK, {len(feed_users)} utilisateurs")
-                for username in feed_users:
-                    username = username.strip()
-                    if username and username not in usernames:
-                        usernames.add(username)
-                        print(f"    {C.GREEN}[+]{C.RST} Found user from feed: {C.BOLD}{username}{C.RST}")
-            else:
-                print(f"[DEBUG]   → Feed RSS échoué (status {r.status_code})")
-        except Exception as e:
-            print(f"[DEBUG]   → Feed RSS exception: {e}")
-
+        # 3. Feed RSS (avec retry)
+        if VERBOSE:
+            print("[DEBUG]   → Source 3: feed RSS")
+        for attempt in range(3):
+            try:
+                r = session.get(self.base + "/feed", timeout=10)
+                if r.status_code == 200:
+                    feed_users = re.findall(r"<dc:creator>([^<]+)<", r.text)
+                    if not feed_users:
+                        feed_users = re.findall(r"<dc:creator>\s*<!\[CDATA\[([^\]]+)\]\]>", r.text)
+                    if VERBOSE:
+                        print(f"[DEBUG]   → Feed RSS OK, {len(feed_users)} utilisateurs")
+                    for username in feed_users:
+                        username = username.strip()
+                        if username and username not in usernames:
+                            usernames.add(username)
+                            print(f"    {C.GREEN}[+]{C.RST} Found user from feed: {C.BOLD}{username}{C.RST}")
+                    break
+                else:
+                    if VERBOSE:
+                        print(f"[DEBUG]   → Feed RSS tentative {attempt+1} échouée (status {r.status_code})")
+                    time.sleep(1)
+            except Exception as e:
+                if VERBOSE:
+                    print(f"[DEBUG]   → Feed RSS tentative {attempt+1} exception: {e}")
+                time.sleep(1)
         print(f"[DEBUG] _harvest_usernames_wp: fin, {len(usernames)} utilisateur(s)")
         return {u for u in usernames if u}
 
