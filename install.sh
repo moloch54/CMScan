@@ -84,7 +84,8 @@ fi
 # ── Création de la structure des vulnérabilités WordPress ──────
 echo -e "${CYAN}[*]${RESET} Création de la structure de la base de données WordPress..."
 mkdir -p vulnDatabase/{coreVuln,pluginsVuln,themesVuln,templates,spiders,exploits}
-echo -e "${GREEN}[+]${RESET} Dossiers créés : coreVuln, pluginsVuln, themesVuln, templates, spiders, exploits"
+mkdir -p results
+echo -e "${GREEN}[+]${RESET} Dossiers créés : coreVuln, pluginsVuln, themesVuln, templates, spiders, exploits, results"
 
 # ── Création du fichier de suivi des mises à jour WordPress ────
 if [ ! -f "last_update_vulnbase.txt" ]; then

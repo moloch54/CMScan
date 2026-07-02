@@ -16,8 +16,8 @@ from lib.headers import audit_headers, display_headers_info
 from lib.vuln import update_friendsofphp_db
 from lib.csv_export import export_csv
 import requests
-from concurrent.futures import ThreadPoolExecutor
 from lib.colors import ok, warn, info, err
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 VERBOSE = False
 
@@ -30,11 +30,6 @@ from lib.colors import info, ok, warn   # adapte si tu n'as pas ce module
 # Fichier contenant la date de dernière mise à jour des vuln WordPress
 WP_LAST_UPDATE_FILE = "last_update_vulnbase.txt"
 
-import datetime
-import os
-import requests
-from concurrent.futures import ThreadPoolExecutor
-from lib.colors import info, ok, warn   # ou vos propres fonctions de couleur
 
 WP_LAST_UPDATE_FILE = "last_update_vulnbase.txt"
 
@@ -1474,7 +1469,7 @@ def detect_magento_score(base, home_html=None, home_headers=None):
 def detect_cms(base):
     """
     Détecte tous les CMS présents sur la cible via scoring.
-    Appelle chaque fonction de scoring (WordPress, Drupal, Joomla, PrestaShop, Magento).
+    Appelle chaque fonction de scoring en parallèle (WordPress, Drupal, Joomla, PrestaShop, Magento).
     Retourne une liste de dicts pour chaque CMS dont le score >= SEUIL.
     Chaque dict : {
         'cms': str,
@@ -1512,79 +1507,47 @@ def detect_cms(base):
 
     # Seuil de détection (score minimum pour valider un CMS)
     SEUIL = 3
-
     detected = []
 
-    # --- Appel de chaque fonction de scoring ---
-    # WordPress
-    wp = detect_wordpress_score(base, home_html, home_headers)
-    if wp['score'] >= SEUIL:
-        detected.append({
-            'cms': 'wordpress',
-            'version': wp['version'],
-            'html': home_html or "",
-            'resp_headers': home_headers or {},
-            'source': wp['source'],
-            'score': wp['score']
-        })
-        if VERBOSE:
-            print(f"[VERBOSE] ✅ WordPress détecté (score {wp['score']}, version '{wp['version']}') via {wp['source']}")
-
-    # Drupal
-    drupal = detect_drupal_score(base, home_html, home_headers)
-    if drupal['score'] >= SEUIL:
-        detected.append({
-            'cms': 'drupal',
-            'version': drupal['version'],
-            'html': home_html or "",
-            'resp_headers': home_headers or {},
-            'source': drupal['source'],
-            'score': drupal['score']
-        })
-        if VERBOSE:
-            print(f"[VERBOSE] ✅ Drupal détecté (score {drupal['score']}, version '{drupal['version']}') via {drupal['source']}")
-
-    # Joomla
-    joomla = detect_joomla_score(base, home_html, home_headers)
-    if joomla['score'] >= SEUIL:
-        detected.append({
-            'cms': 'joomla',
-            'version': joomla['version'],
-            'html': home_html or "",
-            'resp_headers': home_headers or {},
-            'source': joomla['source'],
-            'score': joomla['score']
-        })
-        if VERBOSE:
-            print(f"[VERBOSE] ✅ Joomla détecté (score {joomla['score']}, version '{joomla['version']}') via {joomla['source']}")
-
-    # PrestaShop
-    presta = detect_prestashop_score(base, home_html, home_headers)
-    if presta['score'] >= SEUIL:
-        detected.append({
-            'cms': 'prestashop',
-            'version': presta['version'],
-            'html': home_html or "",
-            'resp_headers': home_headers or {},
-            'source': presta['source'],
-            'score': presta['score']
-        })
-        if VERBOSE:
-            print(f"[VERBOSE] ✅ PrestaShop détecté (score {presta['score']}, version '{presta['version']}') via {presta['source']}")
-
-    # Magento
-    magento = detect_magento_score(base, home_html, home_headers)
-    if magento['score'] >= SEUIL:
-        detected.append({
-            'cms': 'magento',
-            'version': magento['version'],
-            'html': home_html or "",
-            'resp_headers': home_headers or {},
-            'source': magento['source'],
-            'score': magento['score']
-        })
-        if VERBOSE:
-            print(f"[VERBOSE] ✅ Magento détecté (score {magento['score']}, version '{magento['version']}') via {magento['source']}")
+    # --- Appel de chaque fonction de scoring en parallèle ---
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    detectors = [
+        ("wordpress", detect_wordpress_score),
+        ("drupal", detect_drupal_score),
+        ("joomla", detect_joomla_score),
+        ("prestashop", detect_prestashop_score),
+        ("magento", detect_magento_score),
+    ]
+    
+    results = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_name = {
+            executor.submit(detector, base, home_html, home_headers): name
+            for name, detector in detectors
+        }
+        for future in as_completed(future_to_name):
+            name = future_to_name[future]
+            try:
+                results[name] = future.result()
+            except Exception as e:
+                if VERBOSE:
+                    print(f"[VERBOSE] Erreur pour {name} : {e}")
+                results[name] = {'score': 0, 'version': None, 'source': ''}
+    
+    # Traitement des résultats
+    for name, result in results.items():
+        if result['score'] >= SEUIL:
+            detected.append({
+                'cms': name,
+                'version': result['version'],
+                'html': home_html or "",
+                'resp_headers': home_headers or {},
+                'source': result['source'],
+                'score': result['score']
+            })
+            if VERBOSE:
+                print(f"[VERBOSE] ✅ {name.capitalize()} détecté (score {result['score']}, version '{result['version']}') via {result['source']}")
 
     # Élimination des doublons (même CMS) - on garde le plus haut score
     unique = {}

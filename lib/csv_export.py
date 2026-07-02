@@ -9,7 +9,7 @@ def sanitize_filename(name):
     return re.sub(r'[^a-zA-Z0-9._-]', '_', name)[:50]
 
 def generate_csv_filename(target, base_name="cmscan"):
-    """Génère un nom de fichier CSV avec site + date/heure."""
+    """Génère un nom de fichier CSV avec site + date/heure, dans le dossier results/."""
     parsed = urlparse(target)
     domain = parsed.netloc or target
     domain = domain.replace('www.', '').split(':')[0]
@@ -17,8 +17,8 @@ def generate_csv_filename(target, base_name="cmscan"):
     if not domain:
         domain = "unknown"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{base_name}_{domain}_{timestamp}.csv"
-    
+    return os.path.join("results", f"{base_name}_{domain}_{timestamp}.csv")
+      
 def export_csv(res, outfile):
     rows = []
     for v in res.vulns:
