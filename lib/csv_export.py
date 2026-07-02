@@ -18,7 +18,7 @@ def generate_csv_filename(target, base_name="cmscan"):
         domain = "unknown"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return os.path.join("results", f"{base_name}_{domain}_{timestamp}.csv")
-      
+
 def export_csv(res, outfile):
     rows = []
     for v in res.vulns:
@@ -74,6 +74,8 @@ def export_csv(res, outfile):
         })
     if not rows:
         return
+    # Créer le dossier du fichier de sortie s'il n'existe pas
+    os.makedirs(os.path.dirname(outfile), exist_ok=True)
     write_hdr = not os.path.exists(outfile)
     with open(outfile, "a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
