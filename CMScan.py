@@ -253,10 +253,34 @@ def _extract_wp_version(base):
 # 3. DÉTECTIONS PAR CMS
 # ──────────────────────────────────────────────────────────────
 def detect_wordpress(html, headers, base):
-    if not ("wp-content" in html or "wp-includes" in html or "wordpress" in headers.get("x-powered-by", "").lower()):
+    html_l = html.lower()
+    lower_headers = {k.lower(): v for k, v in headers.items()}
+
+    # ── WordPress signals ─────────────────────────────
+    wp_signals = [
+        "/wp-content/" in html_l,
+        "/wp-includes/" in html_l,
+        "wp-json" in html_l,
+        "wordpress" in lower_headers.get("x-powered-by", "").lower(),
+        bool(re.search(r'<meta name="generator" content="WordPress', html, re.I)),
+    ]
+
+    # ── validation wp-login (signal fort) ─────────────
+    if not any(wp_signals):
+        r2 = get(base + "/wp-login.php")
+        if r2 and r2.status_code == 200 and "wordpress" in r2.text.lower():
+            wp_signals.append(True)
+
+    # ── scoring minimal robuste ────────────────────────
+    score = sum(1 for s in wp_signals if s)
+
+    # seuil volontairement strict pour éviter faux positifs
+    if score < 2:
         return None
 
+    # ── version extraction ────────────────────────────
     version = _extract_wp_version(base)
+
     return version if version is not None else ""
 
 def detect_drupal(html, headers, base):
