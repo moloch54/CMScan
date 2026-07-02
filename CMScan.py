@@ -38,6 +38,24 @@ from lib.colors import info, ok, warn   # ou vos propres fonctions de couleur
 
 WP_LAST_UPDATE_FILE = "last_update_vulnbase.txt"
 
+def is_same_domain(domain1, domain2):
+    """
+    Vérifie si deux domaines sont équivalents :
+    - identiques (ex: example.com == example.com)
+    - ou l'un est un sous-domaine de l'autre (ex: www.example.com est sous-domaine de example.com)
+    """
+    if not domain1 or not domain2:
+        return False
+    d1 = domain1.lower()
+    d2 = domain2.lower()
+    # Identiques ?
+    if d1 == d2:
+        return True
+    # Sous-domaine ?
+    if d1.endswith("." + d2) or d2.endswith("." + d1):
+        return True
+    return False
+
 def update_wordpress_vuln_db():
     """Met à jour la base WordPress via l'API et écrit la date dans le fichier."""
     info("Mise à jour de la base de données WordPress vulnérabilités...")
@@ -252,244 +270,1337 @@ def _extract_wp_version(base):
 # ──────────────────────────────────────────────────────────────
 # 3. DÉTECTIONS PAR CMS
 # ──────────────────────────────────────────────────────────────
-def detect_wordpress(html, headers, base):
-    html_l = html.lower()
-    lower_headers = {k.lower(): v for k, v in headers.items()}
-
-    # ── WordPress signals ─────────────────────────────
-    wp_signals = [
-        "/wp-content/" in html_l,
-        "/wp-includes/" in html_l,
-        "wp-json" in html_l,
-        "wordpress" in lower_headers.get("x-powered-by", "").lower(),
-        bool(re.search(r'<meta name="generator" content="WordPress', html, re.I)),
-    ]
-
-    # ── validation wp-login (signal fort) ─────────────
-    if not any(wp_signals):
-        r2 = get(base + "/wp-login.php")
-        if r2 and r2.status_code == 200 and "wordpress" in r2.text.lower():
-            wp_signals.append(True)
-
-    # ── scoring minimal robuste ────────────────────────
-    score = sum(1 for s in wp_signals if s)
-
-    # seuil volontairement strict pour éviter faux positifs
-    if score < 2:
-        return None
-
-    # ── version extraction ────────────────────────────
-    version = _extract_wp_version(base)
-
-    return version if version is not None else ""
-
-def detect_drupal(html, headers, base):
-    if not ("Drupal" in html or "drupal" in headers.get("x-generator", "").lower() or "x-drupal-cache" in headers):
-        return None
-
+def detect_wordpress_score(base, home_html=None, home_headers=None):
+    """
+    Détection WordPress.
+    Retourne un dict avec score, version, source.
+    """
+    score = 0
     version = None
-    m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', html, re.I)
-    if m:
-        version = m.group(1)
+    sources = []
+    
+    if VERBOSE:
+        print("[VERBOSE] ═══ Scoring WordPress ═══")
+        print(f"[VERBOSE] Cible : {base}")
 
-    if not version:
-        for p in ("/core/CHANGELOG.txt", "/CHANGELOG.txt"):
-            r = get(base + p)
-            if r and r.status_code == 200:
-                m = re.search(r"Drupal (\d+\.\d+\.\d+)", r.text)
+    # ===== TEST 1 : /wp-login.php =====
+    url = base + "/wp-login.php"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 1 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if len(content) > 100 and "wordpress" in content.lower():
+                score += 2
+                sources.append(f"{url} (contient 'wordpress')")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, contient 'wordpress' (taille {len(content)}) → +2 points")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ code 200 mais contenu vide ou sans 'wordpress'")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 2 : /readme.html =====
+    url = base + "/readme.html"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 2 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.text) > 100 and "WordPress" in r.text:
+            score += 1
+            sources.append(f"{url} (contient 'WordPress')")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, contient 'WordPress' → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou pas de 'WordPress'")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 3 : /wp-includes/version.php =====
+    url = base + "/wp-includes/version.php"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 3 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if len(content) > 50:
+                m = re.search(r"\$wp_version\s*=\s*'([\d.]+)'", content)
                 if m:
                     version = m.group(1)
+                    score += 2
+                    sources.append(f"{url} (version extraite {version})")
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ version extraite : {version} → +2 points")
+                else:
+                    score += 1
+                    sources.append(f"{url} existe (pas de version)")
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ fichier existe, pas de version → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 4 : headers X-Powered-By =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 4 : Headers X-Powered-By")
+    if home_headers and "x-powered-by" in home_headers:
+        if "wordpress" in home_headers["x-powered-by"].lower():
+            score += 1
+            sources.append("X-Powered-By: WordPress")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ contient 'wordpress' → +1 point")
+        else:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ présent mais pas 'wordpress' : {home_headers['x-powered-by']}")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ absent")
+
+    # ===== TEST 5 : meta generator =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 5 : meta generator WordPress")
+    if home_html:
+        if re.search(r'<meta name="generator" content="WordPress', home_html, re.I):
+            score += 2
+            sources.append("meta generator WordPress")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ trouvé → +2 points")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ absent")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ pas de HTML")
+
+    # ===== TEST 6 : signaux HTML (UNIQUEMENT INTERNES) =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 6 : Signaux HTML (seulement internes)")
+
+    target_domain = urlparse(base).netloc
+    if target_domain.startswith("www."):
+        target_domain = target_domain[4:]
+    if VERBOSE:
+        print(f"[VERBOSE]     Domaine cible (sans www) : {target_domain}")
+
+    internal_found = 0
+    external_found = 0
+
+    if home_html:
+        # Signaux à rechercher
+        signals = ["/wp-content/", "/wp-includes/", "wp-json"]
+        
+        for sig in signals:
+            pos = 0
+            while True:
+                idx = home_html.lower().find(sig, pos)
+                if idx == -1:
                     break
+                # Extraire le contexte pour trouver l'URL
+                start = max(0, idx - 80)
+                end = min(len(home_html), idx + len(sig) + 80)
+                context = home_html[start:end]
+                
+                # Chercher une URL complète
+                url_match = re.search(r'(https?://[^\s"\']+)', context)
+                if url_match:
+                    full_url = url_match.group(1)
+                    url_domain = urlparse(full_url).netloc
+                    if url_domain.startswith("www."):
+                        url_domain = url_domain[4:]
+                    
+                    if url_domain and url_domain == target_domain:
+                        internal_found += 1
+                        if VERBOSE:
+                            print(f"[VERBOSE]       ✓ Occurrence de '{sig}' → URL interne : {full_url}")
+                    else:
+                        external_found += 1
+                        if VERBOSE:
+                            print(f"[VERBOSE]       ✗ Occurrence de '{sig}' → URL externe ignorée : {full_url}")
+                else:
+                    # Pas d'URL, on considère que c'est interne
+                    internal_found += 1
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ Occurrence de '{sig}' → pas d'URL, considérée interne")
+                pos = idx + len(sig)
 
-    if not version:
-        r = get(base + "/core/package.json")
-        if r and r.status_code == 200:
-            try:
-                data = json.loads(r.text)
-                v = data.get("version", "")
-                if re.match(r"\d+\.\d+\.\d+", v):
-                    version = v
-            except:
-                pass
+        if VERBOSE:
+            print(f"[VERBOSE]     Résultat : {internal_found} interne(s), {external_found} externe(s) ignorée(s)")
 
-    return version if version is not None else ""
+        if internal_found >= 2:
+            score += internal_found
+            sources.append(f"{internal_found} signaux HTML internes (+{internal_found} points)")
+            if VERBOSE:
+                print(f"[VERBOSE]   +{internal_found} points pour {internal_found} signaux internes")
+        elif internal_found == 1:
+            score += 1
+            sources.append(f"1 signal HTML interne")
+            if VERBOSE:
+                print(f"[VERBOSE]   +1 point : 1 signal interne")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ pas de HTML")
 
-def find_joomla_base(base):
-    common_paths = [
-        "",
-        "/joomla",
-        "/site",
-        "/cms",
-        "/web",
-        "/public",
-        "/html",
-        "/www",
-        "/joomla2",
-        "/joomla3",
-        "/joomla4",
-        "/admin",
-        "/portal",
-    ]
-    for path in common_paths:
-        test_url = base + path + "/administrator"
-        r = get(test_url)
-        if r and r.status_code in (200, 302, 301, 403):
-            return base + path
-    return base
+    # Bonus version
+    if version:
+        score += 1
+        sources.append("version connue (bonus)")
+        if VERBOSE:
+            print(f"[VERBOSE]   Bonus +1 point pour version connue")
 
-def detect_joomla(html, headers, base):
-    joomla_base = find_joomla_base(base)
+    source = " ; ".join(sources) if sources else "aucun test positif"
+    if VERBOSE:
+        print(f"[VERBOSE]   Score final : {score}")
+        print("[VERBOSE] ═══ Fin scoring WordPress ═══")
+
+    return {'score': score, 'version': version, 'source': source}
+
+def detect_drupal_score(base, home_html=None, home_headers=None):
+    """
+    Score de détection Drupal.
+    Retourne un dict avec score, version, source.
+    """
+    score = 0
     version = None
+    sources = []
 
-    # 1. Meta generator (dans le HTML)
-    m = re.search(r'<meta name="generator" content="Joomla!([^"]+)"', html, re.I)
-    if m:
-        v_match = re.search(r'(\d+\.\d+\.\d+)', m.group(1))
-        if v_match:
-            return v_match.group(1)
+    if VERBOSE:
+        print("[VERBOSE] --- Scoring Drupal ---")
 
-    # 2. /administrator/manifests/files/joomla.xml
-    r = get(joomla_base + '/administrator/manifests/files/joomla.xml')
-    if r and r.status_code == 200:
-        m = re.search(r'<version>([^<]+)</version>', r.text)
-        if m:
-            return m.group(1)
-        m = re.search(r'<extension[^>]*version="([^"]+)"', r.text)
-        if m:
-            return m.group(1)
-
-    # 3. /language/en-GB/en-GB.xml
-    r = get(joomla_base + '/language/en-GB/en-GB.xml')
-    if r and r.status_code == 200:
-        m = re.search(r'<version>([^<]+)</version>', r.text)
-        if m:
-            return m.group(1)
-
-    # 4. /libraries/src/Version.php
-    r = get(joomla_base + '/libraries/src/Version.php')
-    if r and r.status_code == 200:
-        m = re.search(r"const\s+RELEASE\s*=\s*'([^']+)'", r.text)
+    # ===== TEST 1 : meta generator dans la page d'accueil =====
+    if home_html:
+        if VERBOSE:
+            print("[VERBOSE]   Test 1 : recherche meta generator Drupal dans le HTML")
+        m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', home_html, re.I)
         if m:
             version = m.group(1)
-            m = re.search(r"const\s+DEV_LEVEL\s*=\s*'([^']+)'", r.text)
-            if m:
-                version = f"{version}.{m.group(1)}"
-            return version
+            score += 2
+            sources.append(f"meta generator Drupal (version {version})")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ meta generator trouvé : version {version} → +2 points")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de meta generator Drupal")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]   Test 1 : pas de HTML pour tester meta generator")
 
-    # 5. /administrator
-    r = get(joomla_base + "/administrator")
-    if r and r.status_code == 200:
-        m = re.search(r'Joomla! (\d+\.\d+\.\d+)', r.text)
-        if m:
-            return m.group(1)
-
-    return ""   # Joomla détecté mais version inconnue
-
-def detect_prestashop(html, headers, base):
-    if not ("PrestaShop" in html or "prestashop" in headers.get("x-powered-by", "").lower()):
-        return None
-
-    version = None
-    m = re.search(r'<meta name="generator" content="PrestaShop ([^"]+)"', html, re.I)
-    if m:
-        version = m.group(1)
-
-    if not version:
-        for path in ['/classes/Configuration.php', '/config/defines.inc.php']:
-            r = get(base + path)
-            if r and r.status_code == 200:
-                m = re.search(r"_PS_VERSION_\s*=\s*'([^']+)'", r.text)
+    # ===== TEST 2 : /core/CHANGELOG.txt =====
+    url = base + "/core/CHANGELOG.txt"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 2 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if len(content) > 100:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                m = re.search(r"Drupal (\d+\.\d+\.\d+)", content)
                 if m:
                     version = m.group(1)
-                    break
+                    score += 2
+                    sources.append(f"/core/CHANGELOG.txt (version {version})")
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                else:
+                    score += 1
+                    sources.append("/core/CHANGELOG.txt existe (pas de version)")
+                    if VERBOSE:
+                        print("[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
 
-    return version if version is not None else ""
+    # ===== TEST 3 : /CHANGELOG.txt (à la racine, sans /core) =====
+    if not version:  # si on a déjà une version, on saute ce test
+        url = base + "/CHANGELOG.txt"
+        if VERBOSE:
+            print(f"[VERBOSE]   Test 3 : {url}")
+        try:
+            r = get(url)
+            if r and r.status_code == 200:
+                content = r.text
+                if len(content) > 100:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                    m = re.search(r"Drupal (\d+\.\d+\.\d+)", content)
+                    if m:
+                        version = m.group(1)
+                        score += 2
+                        sources.append(f"/CHANGELOG.txt (version {version})")
+                        if VERBOSE:
+                            print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                    else:
+                        score += 1
+                        sources.append("/CHANGELOG.txt existe (pas de version)")
+                        if VERBOSE:
+                            print("[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point")
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            else:
+                code = r.status_code if r else "N/A"
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ code {code}")
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 4 : /core/package.json =====
+    if not version:  # si on a déjà une version, on saute ce test
+        url = base + "/core/package.json"
+        if VERBOSE:
+            print(f"[VERBOSE]   Test 4 : {url}")
+        try:
+            r = get(url)
+            if r and r.status_code == 200:
+                content = r.text
+                if len(content) > 50:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                    try:
+                        data = json.loads(content)
+                        v = data.get("version", "")
+                        if v and re.match(r"\d+\.\d+\.\d+", v):
+                            version = v
+                            score += 2
+                            sources.append(f"/core/package.json (version {version})")
+                            if VERBOSE:
+                                print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                        else:
+                            score += 1
+                            sources.append("/core/package.json existe (pas de version)")
+                            if VERBOSE:
+                                print("[VERBOSE]       ✗ pas de version valide, mais fichier existe → +1 point")
+                    except json.JSONDecodeError:
+                        if VERBOSE:
+                            print("[VERBOSE]       ✗ JSON invalide")
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            else:
+                code = r.status_code if r else "N/A"
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ code {code}")
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 5 : headers X-Generator et X-Drupal-Cache =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 5 : vérification des headers")
+    if home_headers:
+        if "x-generator" in home_headers:
+            if "drupal" in home_headers["x-generator"].lower():
+                score += 1
+                sources.append("X-Generator: Drupal")
+                if VERBOSE:
+                    print("[VERBOSE]     ✓ X-Generator contient 'drupal' → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ X-Generator présent mais pas 'drupal' : {home_headers['x-generator']}")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de X-Generator")
+
+        if "x-drupal-cache" in home_headers:
+            score += 1
+            sources.append("X-Drupal-Cache présent")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ X-Drupal-Cache présent → +1 point")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de X-Drupal-Cache")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ pas de headers disponibles")
+
+    # ===== TEST 6 : /misc/drupal.js =====
+    url = base + "/misc/drupal.js"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 6 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.text) > 100:
+            score += 1
+            sources.append("/misc/drupal.js existe")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 7 : /core/misc/drupal.js (Drupal 8+) =====
+    url = base + "/core/misc/drupal.js"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 7 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.text) > 100:
+            score += 1
+            sources.append("/core/misc/drupal.js existe")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # Bonus si version trouvée
+    if version:
+        score += 1
+        sources.append("version connue (bonus)")
+        if VERBOSE:
+            print(f"[VERBOSE]   Bonus : version connue → +1 point")
+
+    source = " ; ".join(sources) if sources else "aucun test positif"
+    if VERBOSE:
+        print(f"[VERBOSE] Score final Drupal : {score}")
+
+    return {'score': score, 'version': version, 'source': source}
+
+def detect_joomla_score(base, home_html=None, home_headers=None):
+    """
+    Score de détection Joomla.
+    Retourne un dict avec score, version, source.
+    """
+    score = 0
+    version = None
+    sources = []
+
+    if VERBOSE:
+        print("[VERBOSE] --- Scoring Joomla ---")
+
+    # ===== ÉTAPE 1 : Trouver la base Joomla (sous-dossier éventuel) =====
+    joomla_base = base
+    if VERBOSE:
+        print("[VERBOSE]   Recherche de la base Joomla (sous-dossiers possibles)")
+
+    common_paths = ["", "/joomla", "/site", "/cms", "/web", "/public", "/html", "/www", "/admin", "/portal"]
+    found_base = False
+    for sub in common_paths:
+        test_url = base + sub + "/administrator"
+        if VERBOSE:
+            print(f"[VERBOSE]     Test : {test_url}")
+        try:
+            r = get(test_url)
+            if r and r.status_code in (200, 302, 301, 403):
+                if r.status_code == 200 and len(r.text) > 100:
+                    joomla_base = base + sub
+                    found_base = True
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ Base trouvée : {joomla_base} (code 200, contenu significatif)")
+                    break
+                elif r.status_code in (302, 301):
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ Base probable : {base + sub} (redirection {r.status_code})")
+                    joomla_base = base + sub
+                    found_base = True
+                    break
+                elif r.status_code == 403:
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ Base probable : {base + sub} (accès interdit 403, signe de présence)")
+                    joomla_base = base + sub
+                    found_base = True
+                    break
+            else:
+                code = r.status_code if r else "N/A"
+                if VERBOSE:
+                    print(f"[VERBOSE]       ✗ code {code}")
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]       ✗ erreur : {e}")
+
+    if not found_base:
+        joomla_base = base
+        if VERBOSE:
+            print("[VERBOSE]     Aucune base Joomla trouvée, utilisation de la base par défaut")
+
+    if VERBOSE:
+        print(f"[VERBOSE]   Base Joomla utilisée : {joomla_base}")
+
+    # ===== TEST 2 : meta generator dans la page d'accueil =====
+    if home_html:
+        if VERBOSE:
+            print("[VERBOSE]   Test 2 : recherche meta generator Joomla dans le HTML")
+        m = re.search(r'<meta name="generator" content="Joomla!([^"]+)"', home_html, re.I)
+        if m:
+            v_match = re.search(r'(\d+\.\d+\.\d+)', m.group(1))
+            if v_match:
+                version = v_match.group(1)
+                score += 2
+                sources.append(f"meta generator Joomla (version {version})")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ meta generator trouvé : version {version} → +2 points")
+            else:
+                score += 1
+                sources.append("meta generator Joomla (pas de version)")
+                if VERBOSE:
+                    print("[VERBOSE]     ✓ meta generator trouvé mais pas de version → +1 point")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de meta generator Joomla")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]   Test 2 : pas de HTML pour tester meta generator")
+
+    # ===== TEST 3 : /administrator/manifests/files/joomla.xml =====
+    url = joomla_base + "/administrator/manifests/files/joomla.xml"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 3 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if len(content) > 100:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                m = re.search(r'<version>([^<]+)</version>', content)
+                if m:
+                    version = m.group(1)
+                    score += 2
+                    sources.append(f"joomla.xml (version {version})")
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                else:
+                    m = re.search(r'<extension[^>]*version="([^"]+)"', content)
+                    if m:
+                        version = m.group(1)
+                        score += 2
+                        sources.append(f"joomla.xml (version {version})")
+                        if VERBOSE:
+                            print(f"[VERBOSE]       ✓ version trouvée (extension) : {version} → +2 points")
+                    else:
+                        score += 1
+                        sources.append("joomla.xml existe (pas de version)")
+                        if VERBOSE:
+                            print("[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 4 : /language/en-GB/en-GB.xml =====
+    if not version:
+        url = joomla_base + "/language/en-GB/en-GB.xml"
+        if VERBOSE:
+            print(f"[VERBOSE]   Test 4 : {url}")
+        try:
+            r = get(url)
+            if r and r.status_code == 200:
+                content = r.text
+                if len(content) > 100:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                    m = re.search(r'<version>([^<]+)</version>', content)
+                    if m:
+                        version = m.group(1)
+                        score += 2
+                        sources.append(f"en-GB.xml (version {version})")
+                        if VERBOSE:
+                            print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                    else:
+                        score += 1
+                        sources.append("en-GB.xml existe (pas de version)")
+                        if VERBOSE:
+                            print("[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point")
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            else:
+                code = r.status_code if r else "N/A"
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ code {code}")
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 5 : /libraries/src/Version.php =====
+    if not version:
+        url = joomla_base + "/libraries/src/Version.php"
+        if VERBOSE:
+            print(f"[VERBOSE]   Test 5 : {url}")
+        try:
+            r = get(url)
+            if r and r.status_code == 200:
+                content = r.text
+                if len(content) > 100:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                    m = re.search(r"const\s+RELEASE\s*=\s*'([^']+)'", content)
+                    if m:
+                        release = m.group(1)
+                        m2 = re.search(r"const\s+DEV_LEVEL\s*=\s*'([^']+)'", content)
+                        if m2:
+                            version = f"{release}.{m2.group(1)}"
+                        else:
+                            version = release
+                        score += 2
+                        sources.append(f"Version.php (version {version})")
+                        if VERBOSE:
+                            print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                    else:
+                        score += 1
+                        sources.append("Version.php existe (pas de version)")
+                        if VERBOSE:
+                            print("[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point")
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            else:
+                code = r.status_code if r else "N/A"
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ code {code}")
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 6 : /administrator (page de login) =====
+    if not version:
+        url = joomla_base + "/administrator"
+        if VERBOSE:
+            print(f"[VERBOSE]   Test 6 : {url}")
+        try:
+            r = get(url)
+            if r and r.status_code == 200:
+                content = r.text
+                if len(content) > 100:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                    if "Joomla" in content:
+                        m = re.search(r'Joomla! (\d+\.\d+\.\d+)', content)
+                        if m:
+                            version = m.group(1)
+                            score += 2
+                            sources.append(f"/administrator (login page, version {version})")
+                            if VERBOSE:
+                                print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                        else:
+                            score += 1
+                            sources.append("/administrator (login page, contient Joomla)")
+                            if VERBOSE:
+                                print("[VERBOSE]       ✓ contient Joomla mais pas de version → +1 point")
+                    else:
+                        if VERBOSE:
+                            print("[VERBOSE]     ✗ ne contient pas Joomla")
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            else:
+                code = r.status_code if r else "N/A"
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ code {code}")
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 7 : fichiers JS typiques =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 7 : fichiers JS typiques Joomla")
+
+    for path in ["/media/system/js/core.js", "/media/system/js/mootools-core.js"]:
+        url = joomla_base + path
+        if VERBOSE:
+            print(f"[VERBOSE]     Test : {url}")
+        try:
+            r = get(url)
+            if r and r.status_code == 200 and len(r.text) > 100:
+                score += 1
+                sources.append(f"{path} existe")
+                if VERBOSE:
+                    print(f"[VERBOSE]       ✓ code 200, taille {len(r.text)} → +1 point")
+                break
+            else:
+                code = r.status_code if r else "N/A"
+                if VERBOSE:
+                    print(f"[VERBOSE]       ✗ code {code} ou contenu trop court")
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]       ✗ erreur : {e}")
+
+    # ===== TEST 8 : headers X-Content-Encoded-By =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 8 : vérification des headers")
+    if home_headers:
+        # Joomla ajoute parfois X-Content-Encoded-By: Joomla!
+        if "x-content-encoded-by" in home_headers:
+            if "joomla" in home_headers["x-content-encoded-by"].lower():
+                score += 1
+                sources.append("X-Content-Encoded-By: Joomla")
+                if VERBOSE:
+                    print("[VERBOSE]     ✓ X-Content-Encoded-By contient 'joomla' → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ X-Content-Encoded-By présent mais pas 'joomla'")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de X-Content-Encoded-By")
+
+        if "x-generator" in home_headers:
+            if "joomla" in home_headers["x-generator"].lower():
+                score += 1
+                sources.append("X-Generator: Joomla")
+                if VERBOSE:
+                    print("[VERBOSE]     ✓ X-Generator contient 'joomla' → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ X-Generator présent mais pas 'joomla'")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de X-Generator")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ pas de headers disponibles")
+
+    # Bonus si version trouvée
+    if version:
+        score += 1
+        sources.append("version connue (bonus)")
+        if VERBOSE:
+            print(f"[VERBOSE]   Bonus : version connue → +1 point")
+
+    source = " ; ".join(sources) if sources else "aucun test positif"
+    if VERBOSE:
+        print(f"[VERBOSE] Score final Joomla : {score}")
+
+    return {'score': score, 'version': version, 'source': source}
+
+
+def detect_prestashop_score(base, home_html=None, home_headers=None):
+    """
+    Score de détection PrestaShop.
+    Retourne un dict avec score, version, source.
+    """
+    score = 0
+    version = None
+    sources = []
+
+    if VERBOSE:
+        print("[VERBOSE] --- Scoring PrestaShop ---")
+
+    # ===== TEST 1 : meta generator dans la page d'accueil =====
+    if home_html:
+        if VERBOSE:
+            print("[VERBOSE]   Test 1 : recherche meta generator PrestaShop dans le HTML")
+        m = re.search(r'<meta name="generator" content="PrestaShop ([^"]+)"', home_html, re.I)
+        if m:
+            version = m.group(1)
+            score += 2
+            sources.append(f"meta generator PrestaShop (version {version})")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ meta generator trouvé : version {version} → +2 points")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de meta generator PrestaShop")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]   Test 1 : pas de HTML pour tester meta generator")
+
+    # ===== TEST 2 : /classes/Configuration.php =====
+    url = base + "/classes/Configuration.php"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 2 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if len(content) > 100:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                m = re.search(r"_PS_VERSION_\s*=\s*'([^']+)'", content)
+                if m:
+                    version = m.group(1)
+                    score += 2
+                    sources.append(f"Configuration.php (version {version})")
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                else:
+                    score += 1
+                    sources.append("Configuration.php existe (pas de version)")
+                    if VERBOSE:
+                        print("[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 3 : /config/defines.inc.php =====
+    if not version:  # si on a déjà une version, on saute
+        url = base + "/config/defines.inc.php"
+        if VERBOSE:
+            print(f"[VERBOSE]   Test 3 : {url}")
+        try:
+            r = get(url)
+            if r and r.status_code == 200:
+                content = r.text
+                if len(content) > 100:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                    m = re.search(r"_PS_VERSION_\s*=\s*'([^']+)'", content)
+                    if m:
+                        version = m.group(1)
+                        score += 2
+                        sources.append(f"defines.inc.php (version {version})")
+                        if VERBOSE:
+                            print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                    else:
+                        score += 1
+                        sources.append("defines.inc.php existe (pas de version)")
+                        if VERBOSE:
+                            print("[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point")
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            else:
+                code = r.status_code if r else "N/A"
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ code {code}")
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 4 : /img/logo.jpg =====
+    url = base + "/img/logo.jpg"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 4 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.content) > 100:
+            score += 1
+            sources.append("/img/logo.jpg existe")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, taille {len(r.content)} → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 5 : /themes/default/img/logo.jpg =====
+    url = base + "/themes/default/img/logo.jpg"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 5 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.content) > 100:
+            score += 1
+            sources.append("/themes/default/img/logo.jpg existe")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, taille {len(r.content)} → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 6 : headers X-Powered-By =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 6 : vérification des headers")
+    if home_headers and "x-powered-by" in home_headers:
+        if "prestashop" in home_headers["x-powered-by"].lower():
+            score += 1
+            sources.append("X-Powered-By: PrestaShop")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ X-Powered-By contient 'prestashop' → +1 point")
+        else:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ X-Powered-By présent mais pas 'prestashop' : {home_headers['x-powered-by']}")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ pas de X-Powered-By")
+
+    # ===== TEST 7 : fichiers JS typiques PrestaShop =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 7 : fichiers JS typiques")
+
+    for path in ["/js/jquery/jquery-1.7.2.js", "/js/jquery/jquery-1.7.2.min.js", "/js/jquery/jquery-1.11.0.min.js"]:
+        url = base + path
+        if VERBOSE:
+            print(f"[VERBOSE]     Test : {url}")
+        try:
+            r = get(url)
+            if r and r.status_code == 200 and len(r.text) > 100:
+                score += 1
+                sources.append(f"{path} existe")
+                if VERBOSE:
+                    print(f"[VERBOSE]       ✓ code 200, taille {len(r.text)} → +1 point")
+                break
+            else:
+                code = r.status_code if r else "N/A"
+                if VERBOSE:
+                    print(f"[VERBOSE]       ✗ code {code} ou contenu trop court")
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]       ✗ erreur : {e}")
+
+    # ===== TEST 8 : /js/tools.js (fichier PrestaShop) =====
+    url = base + "/js/tools.js"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 8 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.text) > 100:
+            score += 1
+            sources.append("/js/tools.js existe")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # Bonus si version trouvée
+    if version:
+        score += 1
+        sources.append("version connue (bonus)")
+        if VERBOSE:
+            print(f"[VERBOSE]   Bonus : version connue → +1 point")
+
+    source = " ; ".join(sources) if sources else "aucun test positif"
+    if VERBOSE:
+        print(f"[VERBOSE] Score final PrestaShop : {score}")
+
+    return {'score': score, 'version': version, 'source': source}
+
+
+def detect_magento_score(base, home_html=None, home_headers=None):
+    """
+    Score de détection Magento (Magento 1 et 2).
+    Retourne un dict avec score, version, source.
+    """
+    score = 0
+    version = None
+    sources = []
+
+    if VERBOSE:
+        print("[VERBOSE] --- Scoring Magento ---")
+
+    # ===== TEST 1 : meta generator dans la page d'accueil =====
+    if home_html:
+        if VERBOSE:
+            print("[VERBOSE]   Test 1 : recherche meta generator Magento dans le HTML")
+        m = re.search(r'<meta name="generator" content="Magento ([^"]+)"', home_html, re.I)
+        if m:
+            version = m.group(1)
+            score += 2
+            sources.append(f"meta generator Magento (version {version})")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ meta generator trouvé : version {version} → +2 points")
+        else:
+            # Magento 2 utilise parfois <meta name="generator" content="Magento 2"/>
+            m2 = re.search(r'<meta name="generator" content="Magento 2[^"]*"', home_html, re.I)
+            if m2:
+                # On extrait la version si possible
+                v_match = re.search(r'(\d+\.\d+\.\d+)', m2.group(0))
+                if v_match:
+                    version = v_match.group(1)
+                else:
+                    version = "2.x"  # version approximative
+                score += 2
+                sources.append(f"meta generator Magento (version {version})")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ meta generator Magento 2 trouvé : version {version} → +2 points")
+            else:
+                if VERBOSE:
+                    print("[VERBOSE]     ✗ pas de meta generator Magento")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]   Test 1 : pas de HTML pour tester meta generator")
+
+    # ===== TEST 2 : /app/etc/local.xml (Magento 1) =====
+    url = base + "/app/etc/local.xml"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 2 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if len(content) > 100:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                # On cherche des indices de Magento 1
+                if "<config>" in content and "Magento" in content:
+                    score += 2
+                    sources.append("/app/etc/local.xml (Magento 1 config)")
+                    if VERBOSE:
+                        print("[VERBOSE]       ✓ fichier de config Magento 1 détecté → +2 points")
+                else:
+                    score += 1
+                    sources.append("/app/etc/local.xml existe")
+                    if VERBOSE:
+                        print("[VERBOSE]       ✗ fichier existe mais pas de config Magento → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 3 : /app/etc/env.php (Magento 2) =====
+    url = base + "/app/etc/env.php"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 3 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if len(content) > 100:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                if "Magento" in content or "env.php" in content:
+                    score += 2
+                    sources.append("/app/etc/env.php (Magento 2 config)")
+                    if VERBOSE:
+                        print("[VERBOSE]       ✓ fichier de config Magento 2 détecté → +2 points")
+                else:
+                    score += 1
+                    sources.append("/app/etc/env.php existe")
+                    if VERBOSE:
+                        print("[VERBOSE]       ✗ fichier existe mais pas de contenu Magento → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 4 : /js/varien/js.js (Magento 1) =====
+    url = base + "/js/varien/js.js"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 4 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.text) > 100:
+            score += 1
+            sources.append("/js/varien/js.js existe")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 5 : /pub/static/_requirejs/frontend/Magento/luma/en_US/js/require.js (Magento 2) =====
+    url = base + "/pub/static/_requirejs/frontend/Magento/luma/en_US/js/require.js"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 5 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.text) > 100:
+            score += 1
+            sources.append("/pub/static/_requirejs/.../require.js (Magento 2)")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 6 : /skin/frontend/default/default/css/styles.css (Magento 1) =====
+    url = base + "/skin/frontend/default/default/css/styles.css"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 6 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.text) > 100:
+            score += 1
+            sources.append("/skin/frontend/default/default/css/styles.css existe")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 7 : /pub/static/frontend/Magento/luma/en_US/css/styles-l.css (Magento 2) =====
+    url = base + "/pub/static/frontend/Magento/luma/en_US/css/styles-l.css"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 7 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200 and len(r.text) > 100:
+            score += 1
+            sources.append("/pub/static/frontend/Magento/luma/.../styles-l.css (Magento 2)")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 8 : headers X-Magento-* =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 8 : vérification des headers Magento")
+    if home_headers:
+        found_magento_header = False
+        for h in home_headers:
+            if "x-magento" in h.lower():
+                score += 1
+                sources.append(f"Header {h} présent")
+                found_magento_header = True
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ header {h} présent → +1 point")
+                break
+        if not found_magento_header:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de header X-Magento-*")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ pas de headers disponibles")
+
+    # ===== TEST 9 : /Magento/Version (si accessible) =====
+    url = base + "/Magento/Version"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 9 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if len(content) > 10:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
+                m = re.search(r'(\d+\.\d+\.\d+)', content)
+                if m:
+                    version = m.group(1)
+                    score += 2
+                    sources.append(f"/Magento/Version (version {version})")
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ version trouvée : {version} → +2 points")
+                else:
+                    score += 1
+                    sources.append("/Magento/Version existe (pas de version)")
+                    if VERBOSE:
+                        print("[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # Bonus si version trouvée
+    if version:
+        score += 1
+        sources.append("version connue (bonus)")
+        if VERBOSE:
+            print(f"[VERBOSE]   Bonus : version connue → +1 point")
+
+    source = " ; ".join(sources) if sources else "aucun test positif"
+    if VERBOSE:
+        print(f"[VERBOSE] Score final Magento : {score}")
+
+    return {'score': score, 'version': version, 'source': source}
+
+
 
 # ──────────────────────────────────────────────────────────────
 # 4. DÉTECTION GÉNÉRIQUE (priorité WordPress sans Playwright)
 # ──────────────────────────────────────────────────────────────
 def detect_cms(base):
-    print("[DEBUG] detect_cms: appelée pour", base)
+    """
+    Détecte tous les CMS présents sur la cible via scoring.
+    Appelle chaque fonction de scoring (WordPress, Drupal, Joomla, PrestaShop, Magento).
+    Retourne une liste de dicts pour chaque CMS dont le score >= SEUIL.
+    Chaque dict : {
+        'cms': str,
+        'version': str|None,
+        'html': str,
+        'resp_headers': dict,
+        'source': str,
+        'score': int
+    }
+    """
+    if VERBOSE:
+        print(f"[VERBOSE] detect_cms: appelée pour {base}")
 
-    # ── 1. Test rapide WordPress (sans Playwright) ──
-    # a) /wp-login.php
-    r_login = get(base + "/wp-login.php")
-    if r_login and r_login.status_code == 200:
-        print("[DEBUG] WordPress détecté via /wp-login.php")
-        version = _extract_wp_version(base)
-        # Récupérer le HTML de la page d'accueil pour le module
+    # Récupération de la page d'accueil (une seule fois)
+    home_html = None
+    home_headers = {}
+    try:
         r_home = get(base)
-        html = r_home.text if r_home else ""
-        headers = r_home.headers if r_home else {}
-        return {"cms": "wordpress", "version": version, "html": html, "resp_headers": headers}
-
-        # b) /readme.html
-    r_readme = get(base + "/readme.html")
-    if r_readme and r_readme.status_code == 200 and "WordPress" in r_readme.text:
+        if r_home and r_home.status_code == 200:
+            if len(r_home.text.strip()) > 100:
+                home_html = r_home.text
+                home_headers = r_home.headers
+                if VERBOSE:
+                    print(f"[VERBOSE] Page d'accueil récupérée ({len(home_html)} caractères)")
+            else:
+                if VERBOSE:
+                    print("[VERBOSE] Page d'accueil trop courte ou vide, ignorée pour la détection (mais on continue)")
+        else:
+            if VERBOSE:
+                code = r_home.status_code if r_home else "N/A"
+                print(f"[VERBOSE] Page d'accueil : code {code}")
+    except Exception as e:
         if VERBOSE:
-            print("[DEBUG] WordPress détecté via /readme.html")
-        version = _extract_wp_version(base)
-        # Récupérer la page d'accueil pour les métadonnées (emails, auteurs)
-        r_home = get(base)
-        home_html = r_home.text if r_home and r_home.status_code == 200 else ""
-        home_headers = r_home.headers if r_home else {}
+            print(f"[VERBOSE] Erreur récupération page d'accueil : {e}")
+
+    # Seuil de détection (score minimum pour valider un CMS)
+    SEUIL = 3
+
+    detected = []
+
+    # --- Appel de chaque fonction de scoring ---
+    # WordPress
+    wp = detect_wordpress_score(base, home_html, home_headers)
+    if wp['score'] >= SEUIL:
+        detected.append({
+            'cms': 'wordpress',
+            'version': wp['version'],
+            'html': home_html or "",
+            'resp_headers': home_headers or {},
+            'source': wp['source'],
+            'score': wp['score']
+        })
         if VERBOSE:
-            print(f"[DEBUG] Page d'accueil récupérée: {len(home_html)} caractères")
-        return {"cms": "wordpress", "version": version, "html": home_html, "resp_headers": home_headers}
+            print(f"[VERBOSE] ✅ WordPress détecté (score {wp['score']}, version '{wp['version']}') via {wp['source']}")
 
-    # c) Page d'accueil (get simple) avec filtrage des domaines externes
-    r_home = get(base)
-    if r_home and r_home.status_code == 200:
-        html = r_home.text
-        from urllib.parse import urlparse
-        target_domain = urlparse(base).netloc
-        wp_signals = ["wp-content", "wp-includes", "wp-json"]
-        found = False
-        for sig in wp_signals:
-            if sig in html:
-                # Vérifier si le signal est dans une URL externe
-                idx = html.find(sig)
-                # Extraire le contexte autour du signal (300 caractères)
-                context = html[max(0, idx-100):min(len(html), idx+200)]
-                # Chercher une URL complète dans le contexte
-                url_match = re.search(r'(https?://[^\s"\']+)', context)
-                if url_match:
-                    full_url = url_match.group(1)
-                    url_domain = urlparse(full_url).netloc
-                    # Si le domaine est différent du domaine cible, ignorer
-                    if url_domain and url_domain != target_domain:
-                        print(f"[DEBUG] {sig} trouvé dans une URL externe ({url_domain}), ignoré")
-                        continue
-                # Si on arrive ici, le signal est valide (même domaine ou pas d'URL)
-                found = True
-                print(f"[DEBUG] WordPress détecté via page d'accueil (signal: {sig})")
-                start = max(0, idx - 30)
-                end = min(len(html), idx + len(sig) + 30)
-                excerpt = html[start:end].replace('\n', ' ').strip()
-                print(f"[DEBUG]     Extrait: ...{excerpt}...")
-                version = _extract_wp_version(base)
-                return {"cms": "wordpress", "version": version, "html": html, "resp_headers": r_home.headers}
-        if not found:
-            print("[DEBUG] Page d'accueil : aucun signal WordPress valide (même domaine) trouvé")
-            
-    # ── 2. Pour les autres CMS (Drupal, Joomla, PrestaShop) ──
-    print("[DEBUG] Pas de WordPress, tentative Drupal/Joomla/PrestaShop")
-    html, headers = get_html(base)
-    if not html:
-        return {"cms": "unknown", "version": None, "html": "", "resp_headers": {}}
+    # Drupal
+    drupal = detect_drupal_score(base, home_html, home_headers)
+    if drupal['score'] >= SEUIL:
+        detected.append({
+            'cms': 'drupal',
+            'version': drupal['version'],
+            'html': home_html or "",
+            'resp_headers': home_headers or {},
+            'source': drupal['source'],
+            'score': drupal['score']
+        })
+        if VERBOSE:
+            print(f"[VERBOSE] ✅ Drupal détecté (score {drupal['score']}, version '{drupal['version']}') via {drupal['source']}")
 
-    detectors = [
-        ("drupal", detect_drupal),
-        ("joomla", detect_joomla),
-        ("prestashop", detect_prestashop),
-    ]
+    # Joomla
+    joomla = detect_joomla_score(base, home_html, home_headers)
+    if joomla['score'] >= SEUIL:
+        detected.append({
+            'cms': 'joomla',
+            'version': joomla['version'],
+            'html': home_html or "",
+            'resp_headers': home_headers or {},
+            'source': joomla['source'],
+            'score': joomla['score']
+        })
+        if VERBOSE:
+            print(f"[VERBOSE] ✅ Joomla détecté (score {joomla['score']}, version '{joomla['version']}') via {joomla['source']}")
 
-    for cms_name, detector in detectors:
-        version = detector(html, headers, base)
-        if version is not None:
-            return {"cms": cms_name, "version": version if version != "" else None, "html": html, "resp_headers": headers}
+    # PrestaShop
+    presta = detect_prestashop_score(base, home_html, home_headers)
+    if presta['score'] >= SEUIL:
+        detected.append({
+            'cms': 'prestashop',
+            'version': presta['version'],
+            'html': home_html or "",
+            'resp_headers': home_headers or {},
+            'source': presta['source'],
+            'score': presta['score']
+        })
+        if VERBOSE:
+            print(f"[VERBOSE] ✅ PrestaShop détecté (score {presta['score']}, version '{presta['version']}') via {presta['source']}")
 
-    return {"cms": "unknown", "version": None, "html": html, "resp_headers": headers}
+    # Magento
+    magento = detect_magento_score(base, home_html, home_headers)
+    if magento['score'] >= SEUIL:
+        detected.append({
+            'cms': 'magento',
+            'version': magento['version'],
+            'html': home_html or "",
+            'resp_headers': home_headers or {},
+            'source': magento['source'],
+            'score': magento['score']
+        })
+        if VERBOSE:
+            print(f"[VERBOSE] ✅ Magento détecté (score {magento['score']}, version '{magento['version']}') via {magento['source']}")
+
+    # Élimination des doublons (même CMS) - on garde le plus haut score
+    unique = {}
+    for d in detected:
+        cms = d['cms']
+        if cms not in unique or d['score'] > unique[cms]['score']:
+            unique[cms] = d
+    detected = list(unique.values())
+
+    if VERBOSE:
+        if detected:
+            print(f"[VERBOSE] CMS détectés au total : {', '.join([d['cms'] for d in detected])}")
+        else:
+            print("[VERBOSE] Aucun CMS reconnu détecté (score < seuil)")
+
+    return detected
 
 # ──────────────────────────────────────────────────────────────
 # 5. SCAN PRINCIPAL
@@ -503,65 +1614,111 @@ def scan(target, csv_out):
     print(f"{C.CYAN}{C.BOLD}{'═'*66}{C.RST}")
 
     section("CMS Detection")
-    cms_info = detect_cms(base)
-    cms = cms_info["cms"]
+    cms_list = detect_cms(base)  # retourne une liste
 
-    print(f"  CMS     : {cms.capitalize() if cms != 'unknown' else 'Unknown'}")
-    if cms_info["version"]:
-        print(f"  Version : {C.BOLD}{cms_info['version']}{C.RST}")
-    else:
-        warn("Version not detected")
-
-    section("Meta / Site Info")
-    meta = extract_meta(base, cms_info.get("html", ""))
-    if meta["title"]:       print(f"  Title       : {meta['title']}")
-    if meta["description"]: print(f"  Description : {meta['description']}")
-    if meta["emails"]:      print(f"  {C.ORANGE}Emails : {', '.join(meta['emails'][:5])}{C.RST}")
-
-    section("Security Headers")
-    headers_issues = audit_headers(cms_info.get("resp_headers", {}))
-    if not headers_issues:
-        ok("All key security headers present")
-    for h in headers_issues:
-        col = sev_color(h["severity"])
-        print(f"  {col}[{h['severity']}]{C.RST} {h['issue']}  {C.DIM}({h['header']}){C.RST}")
-    display_headers_info(cms_info.get("resp_headers", {}))
-
-    if cms == "wordpress":
-        from modules.wordpress import WordPressModule
-        module = WordPressModule(base, cms_info)
-        result = module.scan()
-    elif cms == "drupal":
-        from modules.drupal import DrupalModule
-        module = DrupalModule(base, cms_info)
-        result = module.scan()
-    elif cms == "joomla":
-        from modules.joomla import JoomlaModule
-        module = JoomlaModule(base, cms_info)
-        result = module.scan()
-    elif cms == "prestashop":
-        from modules.prestashop import PrestaShopModule
-        module = PrestaShopModule(base, cms_info)
-        result = module.scan()
-    else:
-        warn("CMS not supported or not detected")
+    if not cms_list:
+        warn("No CMS detected or supported")
         return
 
+    # Afficher la liste des CMS détectés
+    for idx, cms_info in enumerate(cms_list):
+        cms = cms_info['cms']
+        version = cms_info['version']
+        score = cms_info.get('score', '?')
+        print(f"  [{idx+1}] CMS     : {cms.capitalize()} (score {score})")
+        if version:
+            print(f"      Version : {C.BOLD}{version}{C.RST}")
+        else:
+            warn(f"      Version not detected for {cms}")
+
+    # On va scanner chaque CMS
+    all_vulns = []
+    all_headers_issues = []
+    first_cms = True
+
+    for cms_info in cms_list:
+        cms = cms_info['cms']
+        print(f"\n{C.CYAN}{C.BOLD}── Scanning {cms.capitalize()} ──{C.RST}")
+
+        # Meta et Headers : on les affiche une seule fois (pour le premier CMS)
+        if first_cms:
+            section("Meta / Site Info")
+            meta = extract_meta(base, cms_info.get("html", ""))
+            if meta["title"]:       print(f"  Title       : {meta['title']}")
+            if meta["description"]: print(f"  Description : {meta['description']}")
+            if meta["emails"]:      print(f"  {C.ORANGE}Emails : {', '.join(meta['emails'][:5])}{C.RST}")
+
+            section("Security Headers")
+            headers_issues = audit_headers(cms_info.get("resp_headers", {}))
+            all_headers_issues.extend(headers_issues)
+            if not headers_issues:
+                ok("All key security headers present")
+            else:
+                for h in headers_issues:
+                    col = sev_color(h["severity"])
+                    print(f"  {col}[{h['severity']}]{C.RST} {h['issue']}  {C.DIM}({h['header']}){C.RST}")
+                display_headers_info(cms_info.get("resp_headers", {}))
+            first_cms = False
+
+        # Lancer le module spécifique
+        if cms == "wordpress":
+            from modules.wordpress import WordPressModule
+            module = WordPressModule(base, cms_info)
+            result = module.scan()
+        elif cms == "drupal":
+            from modules.drupal import DrupalModule
+            module = DrupalModule(base, cms_info)
+            result = module.scan()
+        elif cms == "joomla":
+            from modules.joomla import JoomlaModule
+            module = JoomlaModule(base, cms_info)
+            result = module.scan()
+        elif cms == "prestashop":
+            from modules.prestashop import PrestaShopModule
+            module = PrestaShopModule(base, cms_info)
+            result = module.scan()
+        elif cms == "magento":
+            # Si vous avez un module Magento, sinon ignorer
+            from modules.magento import MagentoModule
+            module = MagentoModule(base, cms_info)
+            result = module.scan()
+        else:
+            warn(f"Module for {cms} not available")
+            continue
+
+        # Cumul des vulnérabilités
+        all_vulns.extend(result.vulns)
+
+    # Résumé global
     print(f"\n{C.CYAN}{C.BOLD}{'─'*66}{C.RST}")
     print(f"{C.CYAN}{C.BOLD}  SUMMARY — {base}{C.RST}")
     print(f"{C.CYAN}{C.BOLD}{'─'*66}{C.RST}")
 
-    crit = [v for v in result.vulns if v.severity in ("CRITICAL","HIGH")]
-    med  = [v for v in result.vulns if v.severity == "MEDIUM"]
-    low  = [v for v in result.vulns if v.severity == "LOW"]
+    crit = [v for v in all_vulns if v.severity in ("CRITICAL","HIGH")]
+    med  = [v for v in all_vulns if v.severity == "MEDIUM"]
+    low  = [v for v in all_vulns if v.severity == "LOW"]
 
     print(f"  {C.RED}Critical/High vulns : {len(crit)}{C.RST}")
     print(f"  {C.ORANGE}Medium vulns        : {len(med)}{C.RST}")
     print(f"  {C.YELLOW}Low vulns           : {len(low)}{C.RST}")
-    print(f"  {C.ORANGE}Header issues       : {len(headers_issues)}{C.RST}")
-    if result.version:
-        print(f"  {C.GREEN}{result.cms.capitalize()} version : {result.version}{C.RST}")
-    export_csv(result, csv_out)
+    print(f"  {C.ORANGE}Header issues       : {len(all_headers_issues)}{C.RST}")
+
+    # Affichage des versions des CMS détectés
+    version_str = ", ".join([f"{d['cms']} ({d['version'] or '?'})" for d in cms_list])
+    print(f"  {C.GREEN}Detected CMS versions : {version_str}{C.RST}")
+
+    # Export CSV combiné
+    class CombinedResult:
+        def __init__(self, vulns, cms_list):
+            self.vulns = vulns
+            self.cms = "multiple"
+            self.version = ", ".join([f"{d['cms']} {d['version'] or '?'}" for d in cms_list])
+            self.paths = []
+            self.headers = []
+            self.target = base
+
+    combined = CombinedResult(all_vulns, cms_list)
+    export_csv(combined, csv_out)
     print(f"{C.DIM}→ Results appended to {csv_out}{C.RST}")
     print("")
 

@@ -66,6 +66,44 @@ JOOMLA_SENSITIVE_PATHS = [
     ("/LICENSE.txt",                     "License file exposed",                      "LOW"),
 ]
 
+PRESTASHOP_SENSITIVE_PATHS = [
+    {"path": "/admin", "severity": "LOW", "description": "Admin directory"},
+    {"path": "/admin-dev", "severity": "LOW", "description": "Admin dev directory"},
+    {"path": "/install", "severity": "HIGH", "description": "Install directory (should be removed)"},
+    {"path": "/install-dev", "severity": "HIGH", "description": "Install dev directory"},
+    {"path": "/config/settings.inc.php", "severity": "HIGH", "description": "Config file with DB credentials"},
+    {"path": "/config/defines.inc.php", "severity": "MEDIUM", "description": "Config defines"},
+    {"path": "/classes/Configuration.php", "severity": "LOW", "description": "Configuration class"},
+    {"path": "/override", "severity": "LOW", "description": "Override directory"},
+    {"path": "/cache", "severity": "LOW", "description": "Cache directory"},
+    {"path": "/logs", "severity": "LOW", "description": "Logs directory"},
+    {"path": "/vendor", "severity": "LOW", "description": "Vendor directory"},
+    {"path": "/composer.json", "severity": "LOW", "description": "Composer file"},
+    {"path": "/composer.lock", "severity": "LOW", "description": "Composer lock file"},
+    {"path": "/.gitignore", "severity": "LOW", "description": "Gitignore file"},
+    {"path": "/.htaccess", "severity": "LOW", "description": "HTAccess file"},
+    {"path": "/img/logo.jpg", "severity": "LOW", "description": "Logo image"},
+    {"path": "/js/jquery/jquery-1.7.2.js", "severity": "LOW", "description": "jQuery file"},
+    {"path": "/js/tools.js", "severity": "LOW", "description": "Tools JS"},
+    {"path": "/themes/default/img/logo.jpg", "severity": "LOW", "description": "Default theme logo"},
+]
+
+MAGENTO_SENSITIVE_PATHS = [
+    {"path": "/admin", "severity": "LOW", "description": "Admin directory"},
+    {"path": "/admin-dev", "severity": "LOW", "description": "Admin dev directory"},
+    {"path": "/install", "severity": "HIGH", "description": "Install directory (should be removed)"},
+    {"path": "/app/etc/local.xml", "severity": "HIGH", "description": "Magento 1 config file with DB credentials"},
+    {"path": "/app/etc/env.php", "severity": "HIGH", "description": "Magento 2 config file with DB credentials"},
+    {"path": "/composer.json", "severity": "LOW", "description": "Composer file"},
+    {"path": "/composer.lock", "severity": "LOW", "description": "Composer lock file"},
+    {"path": "/.gitignore", "severity": "LOW", "description": "Gitignore file"},
+    {"path": "/.htaccess", "severity": "LOW", "description": "HTAccess file"},
+    {"path": "/js/varien/js.js", "severity": "LOW", "description": "Varien JS file"},
+    {"path": "/skin/frontend/default/default/css/styles.css", "severity": "LOW", "description": "Default CSS"},
+    {"path": "/pub/static/frontend/Magento/luma/en_US/css/styles-l.css", "severity": "LOW", "description": "Magento 2 CSS"},
+]
+
+
 def _is_404(text):
     patterns = ["404 Not Found", "Page not found", "The requested URL was not found",
                 "Sorry, the page you are looking for", "Error 404"]
