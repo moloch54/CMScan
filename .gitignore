@@ -1,1 +1,7 @@
 *.csv
+vulnDatabase/
+__pycache__/
+*.pyc
+Result/
+last_update_vulnbase.txt
+vulnDatabase/

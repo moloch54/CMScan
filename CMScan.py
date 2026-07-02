@@ -15,7 +15,99 @@ from lib.meta import extract_meta
 from lib.headers import audit_headers, display_headers_info
 from lib.vuln import update_friendsofphp_db
 from lib.csv_export import export_csv
+import requests
+from concurrent.futures import ThreadPoolExecutor
+from lib.colors import ok, warn, info, err
+
 VERBOSE = False
+
+import datetime
+import os
+import requests
+from concurrent.futures import ThreadPoolExecutor
+from lib.colors import info, ok, warn   # adapte si tu n'as pas ce module
+
+# Fichier contenant la date de dernière mise à jour des vuln WordPress
+WP_LAST_UPDATE_FILE = "last_update_vulnbase.txt"
+
+import datetime
+import os
+import requests
+from concurrent.futures import ThreadPoolExecutor
+from lib.colors import info, ok, warn   # ou vos propres fonctions de couleur
+
+WP_LAST_UPDATE_FILE = "last_update_vulnbase.txt"
+
+def update_wordpress_vuln_db():
+    """Met à jour la base WordPress via l'API et écrit la date dans le fichier."""
+    info("Mise à jour de la base de données WordPress vulnérabilités...")
+    updated = 0
+    errors = 0
+    tasks = []
+
+    dirs = {
+        "core": "vulnDatabase/coreVuln",
+        "plugin": "vulnDatabase/pluginsVuln",
+        "theme": "vulnDatabase/themesVuln"
+    }
+
+    for kind, path in dirs.items():
+        if os.path.exists(path):
+            for slug in os.listdir(path):
+                tasks.append((kind, slug))
+
+    if not tasks:
+        warn("Aucun fichier de vulnérabilités WordPress trouvé.")
+        # On écrit quand même la date pour ne pas retenter à chaque démarrage
+        with open(WP_LAST_UPDATE_FILE, "w") as f:
+            f.write(str(datetime.date.today()))
+        return
+
+    total = len(tasks)
+    info(f"Total fichiers à mettre à jour : {total}")
+
+    def update_one(kind, slug):
+        nonlocal updated, errors
+        url = f"https://www.wpvulnerability.net/{kind}/{slug}"
+        try:
+            r = requests.get(url, headers={"User-Agent": "CMScan"}, timeout=5)
+            if r.status_code == 200:
+                with open(os.path.join(dirs[kind], slug), "wb") as f:
+                    f.write(r.content)
+                updated += 1
+                if updated % 50 == 0 or updated == total:
+                    print(f"\r  Progression : {updated}/{total}", end="")
+            else:
+                errors += 1
+        except Exception:
+            errors += 1
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        executor.map(lambda t: update_one(t[0], t[1]), tasks)
+
+    print()  # retour à la ligne
+
+    # Écriture de la date de dernière mise à jour
+    with open(WP_LAST_UPDATE_FILE, "w") as f:
+        f.write(str(datetime.date.today()))
+
+    if errors:
+        warn(f"Mise à jour terminée : {updated} OK, {errors} erreurs")
+    else:
+        ok(f"Mise à jour terminée : {updated} fichiers à jour")
+
+
+def needs_wp_vuln_update():
+    """Retourne True si la mise à jour est nécessaire (>7j ou fichier absent)."""
+    if not os.path.exists(WP_LAST_UPDATE_FILE):
+        return True
+    try:
+        with open(WP_LAST_UPDATE_FILE, "r") as f:
+            last_str = f.read().strip()
+        last_date = datetime.datetime.strptime(last_str, "%Y-%m-%d").date()
+        return (datetime.date.today() - last_date).days > 7
+    except Exception:
+        return True
 
 def auto_update():
     """Vérifie automatiquement les mises à jour sur GitHub et se relance si nécessaire."""
@@ -25,21 +117,25 @@ def auto_update():
         import subprocess
         import urllib.request
         import time
-        # Récupérer la version distante
+
         url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
         with urllib.request.urlopen(url, timeout=3) as response:
             remote_version = response.read().decode('utf-8').strip()
-        # Lire la version locale
+
         if os.path.exists("version.txt"):
             with open("version.txt", "r") as f:
                 local_version = f.read().strip()
         else:
             local_version = "0.0"
+
         if local_version != remote_version:
             print(f"\n{C.GREEN}{C.BOLD}[+] Nouvelle version disponible : {remote_version} (actuelle : {local_version}){C.RST}")
             print(f"{C.CYAN}[*] Téléchargement de la mise à jour...{C.RST}")
             subprocess.run(["git", "pull", "--quiet"], check=True)
-            # Relire la version après pull
+
+            # ═══ NOUVEAU : Mise à jour de la base WordPress après pull ═══
+            update_wordpress_vuln_db()
+
             with open("version.txt", "r") as f:
                 new_version = f.read().strip()
             print(f"{C.GREEN}{C.BOLD}[✓] Mise à jour vers la version {new_version} effectuée !{C.RST}")
@@ -47,7 +143,6 @@ def auto_update():
             time.sleep(1)
             os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
-        # Silencieux en cas d'erreur (pas de blocage)
         pass
         
 try:
@@ -458,9 +553,13 @@ def main():
     if args.verbose:
         VERBOSE = True
     auto_update()
-
+    
+    if needs_wp_vuln_update():
+        update_wordpress_vuln_db()
+    
     if args.update:
         print("[*] Updating vulnerability databases...")
+        update_wordpress_vuln_db()
         update_friendsofphp_db()
         sys.exit(0)
 

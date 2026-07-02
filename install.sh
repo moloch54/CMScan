@@ -81,6 +81,23 @@ else
     exit 1
 fi
 
+# ── Création de la structure des vulnérabilités WordPress ──────
+echo -e "${CYAN}[*]${RESET} Création de la structure de la base de données WordPress..."
+mkdir -p vulnDatabase/{coreVuln,pluginsVuln,themesVuln,templates,spiders,exploits}
+echo -e "${GREEN}[+]${RESET} Dossiers créés : coreVuln, pluginsVuln, themesVuln, templates, spiders, exploits"
+
+# ── Création du fichier de suivi des mises à jour WordPress ────
+if [ ! -f "last_update_vulnbase.txt" ]; then
+    date +%Y-%m-%d > last_update_vulnbase.txt
+    echo -e "${GREEN}[+]${RESET} Fichier last_update_vulnbase.txt créé avec la date du jour"
+fi
+
+# ── Vérification du fichier version.txt ─────────────────────────
+if [ ! -f "version.txt" ]; then
+    echo "0.0" > version.txt
+    echo -e "${YELLOW}[!]${RESET} version.txt créé avec 0.0 par défaut"
+fi
+
 # ── Téléchargement de la base FriendsOfPHP ─────────────────────
 echo -e "${CYAN}[*]${RESET} Téléchargement de la base FriendsOfPHP..."
 mkdir -p vulnDatabase
