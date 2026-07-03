@@ -162,7 +162,7 @@ try:
     with open("version.txt", "r") as f:
         VERSION = f.read().strip()
 except:
-    VERSION = "3.4"
+    VERSION = "3.7"
 
 BANNER = f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
