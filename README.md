@@ -1,6 +1,6 @@
 # CMScan
 
-**CMScan** est un scanner de sécurité unifié pour sites WordPress, Drupal, Joomla et PrestaShop.  
+**CMScan** est un scanner de sécurité unifié pour sites WordPress, Drupal, Joomla, PrestaShop et Magento  
 Il détecte les versions, énumère les utilisateurs, vérifie les vulnérabilités et exporte les résultats en CSV.
 
 ## Fonctionnalités
