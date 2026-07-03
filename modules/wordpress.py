@@ -10,9 +10,9 @@ from lib.http import get, _cmseek_getsource
 from lib.paths import check_paths, WP_SENSITIVE_PATHS
 from lib.vuln import check_vulns_friendsofphp
 from modules.base import BaseModule, Vuln
-from CMScan import VERBOSE
 import urllib.request
 import time
+VERBOSE = False
 
 class WordPressModule(BaseModule):
     def __init__(self, base_url, cms_info):
@@ -126,7 +126,7 @@ class WordPressModule(BaseModule):
 
     def _paths_scan(self):
         section("Exposed Paths")
-        findings = check_paths(self.base, WP_SENSITIVE_PATHS)
+        findings = check_paths(self.base, WP_SENSITIVE_PATHS, home_content=self.html)
         if not findings:
             ok("No obviously exposed sensitive paths")
         for p in findings:
@@ -229,18 +229,29 @@ class WordPressModule(BaseModule):
 
     def _harvest_usernames_wp(self):
         import requests
+        import time
         usernames = set()
-        ua = "Mozilla/5.0"
-        print(f"[DEBUG] _harvest_usernames_wp: début pour {self.base}")
-
-        session = requests.Session()
-        session.headers.update({"User-Agent": ua})
-        session.verify = False
+        
+        # Liste d'User-Agents (copiée de WPscrap)
+        user_agents = [
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:53.0) Gecko/20100101 Firefox/53.0',
+            'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0; Trident/5.0; Trident/5.0)',
+            'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Trident/6.0; MDDCJS)',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.79 Safari/537.36 Edge/14.14393',
+            'Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1)'
+        ]
+        
+        if VERBOSE:
+            print(f"[DEBUG] _harvest_usernames_wp: début pour {self.base}")
 
         # 1. API REST
-        print("[DEBUG]   → Source 1: wp-json API")
+        if VERBOSE:
+            print("[DEBUG]   → Source 1: wp-json API")
         try:
-            r = session.get(self.base + "/wp-json/wp/v2/users", timeout=4)
+            headers = {'User-Agent': random.choice(user_agents)}
+            r = requests.get(self.base + "/wp-json/wp/v2/users", headers=headers, timeout=10)
             if r.status_code == 200:
                 data = r.json()
                 for user in data:
@@ -248,17 +259,22 @@ class WordPressModule(BaseModule):
                     if slug:
                         usernames.add(slug)
                         print(f"    {C.GREEN}[+]{C.RST} Found user from wp-json: {C.BOLD}{slug}{C.RST}")
-                print(f"[DEBUG]   → wp-json OK, {len(data)} utilisateurs")
+                if VERBOSE:
+                    print(f"[DEBUG]   → wp-json OK, {len(data)} utilisateurs")
             else:
-                print(f"[DEBUG]   → wp-json échoué (status {r.status_code})")
+                if VERBOSE:
+                    print(f"[DEBUG]   → wp-json échoué (status {r.status_code})")
         except Exception as e:
-            print(f"[DEBUG]   → wp-json exception: {e}")
+            if VERBOSE:
+                print(f"[DEBUG]   → wp-json exception: {e}")
 
         # 2. ?author= redirection
-        print("[DEBUG]   → Source 2: ?author= redirection (1 à 20)")
+        if VERBOSE:
+            print("[DEBUG]   → Source 2: ?author= redirection (1 à 20)")
         for i in range(1, 21):
             try:
-                r = session.get(self.base + f"/?author={i}", timeout=4, allow_redirects=True)
+                headers = {'User-Agent': random.choice(user_agents)}
+                r = requests.get(self.base + f"/?author={i}", headers=headers, timeout=10, allow_redirects=True)
                 if r.status_code == 200:
                     final_url = r.url
                     if "/author/" in final_url:
@@ -288,29 +304,39 @@ class WordPressModule(BaseModule):
                                 print(f"    {C.GREEN}[+]{C.RST} Found user from ?author={i} (Location): {C.BOLD}{username}{C.RST}")
                             continue
             except Exception as e:
-                if i <= 3:
+                if i <= 3 and VERBOSE:
                     print(f"[DEBUG]   → ?author={i} échec: {e}")
 
-        # 3. Feed RSS
-        print("[DEBUG]   → Source 3: feed RSS")
-        try:
-            r = session.get(self.base + "/feed", timeout=4)
-            if r.status_code == 200:
-                feed_users = re.findall(r"<dc:creator>([^<]+)<", r.text)
-                if not feed_users:
-                    feed_users = re.findall(r"<dc:creator>\s*<!\[CDATA\[([^\]]+)\]\]>", r.text)
-                print(f"[DEBUG]   → Feed RSS OK, {len(feed_users)} utilisateurs")
-                for username in feed_users:
-                    username = username.strip()
-                    if username and username not in usernames:
-                        usernames.add(username)
-                        print(f"    {C.GREEN}[+]{C.RST} Found user from feed: {C.BOLD}{username}{C.RST}")
-            else:
-                print(f"[DEBUG]   → Feed RSS échoué (status {r.status_code})")
-        except Exception as e:
-            print(f"[DEBUG]   → Feed RSS exception: {e}")
+        # 3. Feed RSS (avec retry)
+        if VERBOSE:
+            print("[DEBUG]   → Source 3: feed RSS")
+        for attempt in range(3):
+            try:
+                headers = {'User-Agent': random.choice(user_agents)}
+                r = requests.get(self.base + "/feed", headers=headers, timeout=10)
+                if r.status_code == 200:
+                    feed_users = re.findall(r"<dc:creator>([^<]+)<", r.text)
+                    if not feed_users:
+                        feed_users = re.findall(r"<dc:creator>\s*<!\[CDATA\[([^\]]+)\]\]>", r.text)
+                    if VERBOSE:
+                        print(f"[DEBUG]   → Feed RSS OK, {len(feed_users)} utilisateurs")
+                    for username in feed_users:
+                        username = username.strip()
+                        if username and username not in usernames:
+                            usernames.add(username)
+                            print(f"    {C.GREEN}[+]{C.RST} Found user from feed: {C.BOLD}{username}{C.RST}")
+                    break
+                else:
+                    if VERBOSE:
+                        print(f"[DEBUG]   → Feed RSS tentative {attempt+1} échouée (status {r.status_code})")
+                    time.sleep(1)
+            except Exception as e:
+                if VERBOSE:
+                    print(f"[DEBUG]   → Feed RSS tentative {attempt+1} exception: {e}")
+                time.sleep(1)
 
-        print(f"[DEBUG] _harvest_usernames_wp: fin, {len(usernames)} utilisateur(s)")
+        if VERBOSE:
+            print(f"[DEBUG] _harvest_usernames_wp: fin, {len(usernames)} utilisateur(s)")
         return {u for u in usernames if u}
 
     def _wp_slugs_from_html(self, html, kind):

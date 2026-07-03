@@ -3,6 +3,17 @@ import random
 import re
 from lib.http import _cmseek_getsource
 from lib.colors import C, sev_color
+VERBOSE = False
+
+USER_AGENTS = [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:53.0) Gecko/20100101 Firefox/53.0',
+    'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0; Trident/5.0; Trident/5.0)',
+    'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Trident/6.0; MDDCJS)',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.79 Safari/537.36 Edge/14.14393',
+    'Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1)'
+]
 
 WP_SENSITIVE_PATHS = [
     ("/wp-config.php.bak",                  "wp-config backup exposed",                  "CRITICAL"),
@@ -145,42 +156,91 @@ _PATH_SIGNATURES = {
     "/install.php":                      None,
 }
 
-def check_paths(base, path_list):
+def check_paths(base, path_list, home_content=None):
     findings = []
     lock = threading.Lock()
+
+    def is_error_page(content):
+        patterns = [
+            "404 Not Found", "Page not found", "The requested URL was not found",
+            "Sorry, the page you are looking for", "Error 404",
+            "403 Forbidden", "Access denied", "Forbidden",
+            "500 Internal Server Error", "Internal Server Error"
+        ]
+        return any(p in content for p in patterns)
+
     def check_one(entry):
         path, desc, sev = entry
-        ua = random.choice(["Mozilla/5.0"])
-        src = _cmseek_getsource(base + path, ua)
+        url = base + path
+        if VERBOSE:
+            print(f"[VERBOSE]   Path test: {url}")
+        ua = random.choice(USER_AGENTS)
+        src = _cmseek_getsource(url, ua)
         if src[0] != '1':
+            if VERBOSE:
+                print(f"[VERBOSE]     → {url} : source non récupérée (code {src[0]})")
             return None
         content = src[1]
         if len(content.strip()) < 20:
+            if VERBOSE:
+                print(f"[VERBOSE]     → {url} : contenu trop court ({len(content.strip())})")
             return None
+
+        if is_error_page(content):
+            if VERBOSE:
+                print(f"[VERBOSE]     → {url} : page d'erreur (403/404/500) ignorée")
+            return None
+
+        if home_content and len(content) > 100 and content == home_content:
+            if VERBOSE:
+                print(f"[VERBOSE]     → {url} : redirige vers page d'accueil (identique) ignoré")
+            return None
+        if home_content and len(content) > 100 and len(home_content) > 100:
+            if content[:200] == home_content[:200]:
+                if VERBOSE:
+                    print(f"[VERBOSE]     → {url} : redirige vers page d'accueil (similaire) ignoré")
+                return None
+
         sig = _PATH_SIGNATURES.get(path)
         if sig is None:
-            if _is_404(content):
-                return None
+            pass
         elif hasattr(sig, "search"):
             if not sig.search(content):
+                if VERBOSE:
+                    print(f"[VERBOSE]     → {url} : signature non trouvée, ignoré")
                 return None
         elif isinstance(sig, list):
             if not any(kw in content for kw in sig):
+                if VERBOSE:
+                    print(f"[VERBOSE]     → {url} : signature non trouvée (liste), ignoré")
                 return None
         else:
             if sig not in content:
+                if VERBOSE:
+                    print(f"[VERBOSE]     → {url} : signature '{sig}' non trouvée, ignoré")
                 return None
+
+        if VERBOSE:
+            print(f"[VERBOSE]     → {url} : OK (exposé)")
+
         with lock:
-            findings.append({"path": path, "url": base + path,
-                             "description": desc, "severity": sev,
-                             "status": 200})
+            findings.append({
+                "path": path,
+                "url": url,
+                "description": desc,
+                "severity": sev,
+                "status": 200
+            })
+
     threads = []
     for entry in path_list:
         t = threading.Thread(target=check_one, args=(entry,), daemon=True)
         t.start()
         threads.append(t)
+
     for t in threads:
         t.join(timeout=8)
+
     sev_ord = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     findings.sort(key=lambda x: sev_ord.get(x["severity"], 4))
     return findings

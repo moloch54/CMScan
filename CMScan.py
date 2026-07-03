@@ -33,6 +33,18 @@ WP_LAST_UPDATE_FILE = "last_update_vulnbase.txt"
 
 WP_LAST_UPDATE_FILE = "last_update_vulnbase.txt"
 
+def is_home_redirect(content, home_html):
+    """
+    Détecte si le contenu est celui de la page d'accueil (redirection ou rewriting).
+    """
+    if not home_html or not content:
+        return False
+    # Si les longueurs sont proches et les premiers 500 caractères identiques
+    if len(content) > 200 and len(home_html) > 200:
+        if content[:500] == home_html[:500]:
+            return True
+    return False
+
 def is_same_domain(domain1, domain2):
     """
     Vérifie si deux domaines sont équivalents :
@@ -265,208 +277,6 @@ def _extract_wp_version(base):
 # ──────────────────────────────────────────────────────────────
 # 3. DÉTECTIONS PAR CMS
 # ──────────────────────────────────────────────────────────────
-def detect_wordpress_score(base, home_html=None, home_headers=None):
-    """
-    Détection WordPress.
-    Retourne un dict avec score, version, source.
-    """
-    score = 0
-    version = None
-    sources = []
-    
-    if VERBOSE:
-        print("[VERBOSE] ═══ Scoring WordPress ═══")
-        print(f"[VERBOSE] Cible : {base}")
-
-    # ===== TEST 1 : /wp-login.php =====
-    url = base + "/wp-login.php"
-    if VERBOSE:
-        print(f"[VERBOSE]   Test 1 : {url}")
-    try:
-        r = get(url)
-        if r and r.status_code == 200:
-            content = r.text
-            if len(content) > 100 and "wordpress" in content.lower():
-                score += 2
-                sources.append(f"{url} (contient 'wordpress')")
-                if VERBOSE:
-                    print(f"[VERBOSE]     ✓ code 200, contient 'wordpress' (taille {len(content)}) → +2 points")
-            else:
-                if VERBOSE:
-                    print(f"[VERBOSE]     ✗ code 200 mais contenu vide ou sans 'wordpress'")
-        else:
-            code = r.status_code if r else "N/A"
-            if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code}")
-    except Exception as e:
-        if VERBOSE:
-            print(f"[VERBOSE]     ✗ erreur : {e}")
-
-    # ===== TEST 2 : /readme.html =====
-    url = base + "/readme.html"
-    if VERBOSE:
-        print(f"[VERBOSE]   Test 2 : {url}")
-    try:
-        r = get(url)
-        if r and r.status_code == 200 and len(r.text) > 100 and "WordPress" in r.text:
-            score += 1
-            sources.append(f"{url} (contient 'WordPress')")
-            if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, contient 'WordPress' → +1 point")
-        else:
-            code = r.status_code if r else "N/A"
-            if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou pas de 'WordPress'")
-    except Exception as e:
-        if VERBOSE:
-            print(f"[VERBOSE]     ✗ erreur : {e}")
-
-    # ===== TEST 3 : /wp-includes/version.php =====
-    url = base + "/wp-includes/version.php"
-    if VERBOSE:
-        print(f"[VERBOSE]   Test 3 : {url}")
-    try:
-        r = get(url)
-        if r and r.status_code == 200:
-            content = r.text
-            if len(content) > 50:
-                m = re.search(r"\$wp_version\s*=\s*'([\d.]+)'", content)
-                if m:
-                    version = m.group(1)
-                    score += 2
-                    sources.append(f"{url} (version extraite {version})")
-                    if VERBOSE:
-                        print(f"[VERBOSE]     ✓ version extraite : {version} → +2 points")
-                else:
-                    score += 1
-                    sources.append(f"{url} existe (pas de version)")
-                    if VERBOSE:
-                        print(f"[VERBOSE]     ✓ fichier existe, pas de version → +1 point")
-            else:
-                if VERBOSE:
-                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
-        else:
-            code = r.status_code if r else "N/A"
-            if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code}")
-    except Exception as e:
-        if VERBOSE:
-            print(f"[VERBOSE]     ✗ erreur : {e}")
-
-    # ===== TEST 4 : headers X-Powered-By =====
-    if VERBOSE:
-        print("[VERBOSE]   Test 4 : Headers X-Powered-By")
-    if home_headers and "x-powered-by" in home_headers:
-        if "wordpress" in home_headers["x-powered-by"].lower():
-            score += 1
-            sources.append("X-Powered-By: WordPress")
-            if VERBOSE:
-                print(f"[VERBOSE]     ✓ contient 'wordpress' → +1 point")
-        else:
-            if VERBOSE:
-                print(f"[VERBOSE]     ✗ présent mais pas 'wordpress' : {home_headers['x-powered-by']}")
-    else:
-        if VERBOSE:
-            print("[VERBOSE]     ✗ absent")
-
-    # ===== TEST 5 : meta generator =====
-    if VERBOSE:
-        print("[VERBOSE]   Test 5 : meta generator WordPress")
-    if home_html:
-        if re.search(r'<meta name="generator" content="WordPress', home_html, re.I):
-            score += 2
-            sources.append("meta generator WordPress")
-            if VERBOSE:
-                print("[VERBOSE]     ✓ trouvé → +2 points")
-        else:
-            if VERBOSE:
-                print("[VERBOSE]     ✗ absent")
-    else:
-        if VERBOSE:
-            print("[VERBOSE]     ✗ pas de HTML")
-
-    # ===== TEST 6 : signaux HTML (UNIQUEMENT INTERNES) =====
-    if VERBOSE:
-        print("[VERBOSE]   Test 6 : Signaux HTML (seulement internes)")
-
-    target_domain = urlparse(base).netloc
-    if target_domain.startswith("www."):
-        target_domain = target_domain[4:]
-    if VERBOSE:
-        print(f"[VERBOSE]     Domaine cible (sans www) : {target_domain}")
-
-    internal_found = 0
-    external_found = 0
-
-    if home_html:
-        # Signaux à rechercher
-        signals = ["/wp-content/", "/wp-includes/", "wp-json"]
-        
-        for sig in signals:
-            pos = 0
-            while True:
-                idx = home_html.lower().find(sig, pos)
-                if idx == -1:
-                    break
-                # Extraire le contexte pour trouver l'URL
-                start = max(0, idx - 80)
-                end = min(len(home_html), idx + len(sig) + 80)
-                context = home_html[start:end]
-                
-                # Chercher une URL complète
-                url_match = re.search(r'(https?://[^\s"\']+)', context)
-                if url_match:
-                    full_url = url_match.group(1)
-                    url_domain = urlparse(full_url).netloc
-                    if url_domain.startswith("www."):
-                        url_domain = url_domain[4:]
-                    
-                    if url_domain and url_domain == target_domain:
-                        internal_found += 1
-                        if VERBOSE:
-                            print(f"[VERBOSE]       ✓ Occurrence de '{sig}' → URL interne : {full_url}")
-                    else:
-                        external_found += 1
-                        if VERBOSE:
-                            print(f"[VERBOSE]       ✗ Occurrence de '{sig}' → URL externe ignorée : {full_url}")
-                else:
-                    # Pas d'URL, on considère que c'est interne
-                    internal_found += 1
-                    if VERBOSE:
-                        print(f"[VERBOSE]       ✓ Occurrence de '{sig}' → pas d'URL, considérée interne")
-                pos = idx + len(sig)
-
-        if VERBOSE:
-            print(f"[VERBOSE]     Résultat : {internal_found} interne(s), {external_found} externe(s) ignorée(s)")
-
-        if internal_found >= 2:
-            score += internal_found
-            sources.append(f"{internal_found} signaux HTML internes (+{internal_found} points)")
-            if VERBOSE:
-                print(f"[VERBOSE]   +{internal_found} points pour {internal_found} signaux internes")
-        elif internal_found == 1:
-            score += 1
-            sources.append(f"1 signal HTML interne")
-            if VERBOSE:
-                print(f"[VERBOSE]   +1 point : 1 signal interne")
-    else:
-        if VERBOSE:
-            print("[VERBOSE]     ✗ pas de HTML")
-
-    # Bonus version
-    if version:
-        score += 1
-        sources.append("version connue (bonus)")
-        if VERBOSE:
-            print(f"[VERBOSE]   Bonus +1 point pour version connue")
-
-    source = " ; ".join(sources) if sources else "aucun test positif"
-    if VERBOSE:
-        print(f"[VERBOSE]   Score final : {score}")
-        print("[VERBOSE] ═══ Fin scoring WordPress ═══")
-
-    return {'score': score, 'version': version, 'source': source}
-
 def detect_drupal_score(base, home_html=None, home_headers=None):
     """
     Score de détection Drupal.
@@ -505,7 +315,10 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
         r = get(url)
         if r and r.status_code == 200:
             content = r.text
-            if len(content) > 100:
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                 m = re.search(r"Drupal (\d+\.\d+\.\d+)", content)
@@ -523,6 +336,9 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
             else:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
@@ -532,7 +348,7 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
             print(f"[VERBOSE]     ✗ erreur : {e}")
 
     # ===== TEST 3 : /CHANGELOG.txt (à la racine, sans /core) =====
-    if not version:  # si on a déjà une version, on saute ce test
+    if not version:
         url = base + "/CHANGELOG.txt"
         if VERBOSE:
             print(f"[VERBOSE]   Test 3 : {url}")
@@ -540,7 +356,10 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
             r = get(url)
             if r and r.status_code == 200:
                 content = r.text
-                if len(content) > 100:
+                if home_html and is_home_redirect(content, home_html):
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+                elif len(content) > 100:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                     m = re.search(r"Drupal (\d+\.\d+\.\d+)", content)
@@ -558,6 +377,9 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
                 else:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            elif r and r.status_code == 403:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
             else:
                 code = r.status_code if r else "N/A"
                 if VERBOSE:
@@ -567,7 +389,7 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
                 print(f"[VERBOSE]     ✗ erreur : {e}")
 
     # ===== TEST 4 : /core/package.json =====
-    if not version:  # si on a déjà une version, on saute ce test
+    if not version:
         url = base + "/core/package.json"
         if VERBOSE:
             print(f"[VERBOSE]   Test 4 : {url}")
@@ -575,7 +397,10 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
             r = get(url)
             if r and r.status_code == 200:
                 content = r.text
-                if len(content) > 50:
+                if home_html and is_home_redirect(content, home_html):
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+                elif len(content) > 50:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                     try:
@@ -598,6 +423,9 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
                 else:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            elif r and r.status_code == 403:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
             else:
                 code = r.status_code if r else "N/A"
                 if VERBOSE:
@@ -641,15 +469,26 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE]   Test 6 : {url}")
     try:
         r = get(url)
-        if r and r.status_code == 200 and len(r.text) > 100:
-            score += 1
-            sources.append("/misc/drupal.js existe")
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
+                score += 1
+                sources.append("/misc/drupal.js existe")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)} → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
             if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+                print(f"[VERBOSE]     ✗ code {code}")
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
@@ -660,15 +499,26 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE]   Test 7 : {url}")
     try:
         r = get(url)
-        if r and r.status_code == 200 and len(r.text) > 100:
-            score += 1
-            sources.append("/core/misc/drupal.js existe")
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
+                score += 1
+                sources.append("/core/misc/drupal.js existe")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)} → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
             if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+                print(f"[VERBOSE]     ✗ code {code}")
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
@@ -779,7 +629,10 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
         r = get(url)
         if r and r.status_code == 200:
             content = r.text
-            if len(content) > 100:
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                 m = re.search(r'<version>([^<]+)</version>', content)
@@ -805,6 +658,9 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
             else:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
@@ -822,7 +678,10 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
             r = get(url)
             if r and r.status_code == 200:
                 content = r.text
-                if len(content) > 100:
+                if home_html and is_home_redirect(content, home_html):
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+                elif len(content) > 100:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                     m = re.search(r'<version>([^<]+)</version>', content)
@@ -840,6 +699,9 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
                 else:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            elif r and r.status_code == 403:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
             else:
                 code = r.status_code if r else "N/A"
                 if VERBOSE:
@@ -857,7 +719,10 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
             r = get(url)
             if r and r.status_code == 200:
                 content = r.text
-                if len(content) > 100:
+                if home_html and is_home_redirect(content, home_html):
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+                elif len(content) > 100:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                     m = re.search(r"const\s+RELEASE\s*=\s*'([^']+)'", content)
@@ -880,6 +745,9 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
                 else:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            elif r and r.status_code == 403:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
             else:
                 code = r.status_code if r else "N/A"
                 if VERBOSE:
@@ -897,7 +765,10 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
             r = get(url)
             if r and r.status_code == 200:
                 content = r.text
-                if len(content) > 100:
+                if home_html and is_home_redirect(content, home_html):
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+                elif len(content) > 100:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                     if "Joomla" in content:
@@ -919,6 +790,9 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
                 else:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            elif r and r.status_code == 403:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
             else:
                 code = r.status_code if r else "N/A"
                 if VERBOSE:
@@ -937,16 +811,27 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
             print(f"[VERBOSE]     Test : {url}")
         try:
             r = get(url)
-            if r and r.status_code == 200 and len(r.text) > 100:
-                score += 1
-                sources.append(f"{path} existe")
+            if r and r.status_code == 200:
+                content = r.text
+                if home_html and is_home_redirect(content, home_html):
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✗ {url} redirige vers la page d'accueil, ignoré")
+                elif len(content) > 100:
+                    score += 1
+                    sources.append(f"{path} existe")
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ code 200, taille {len(content)} → +1 point")
+                    break
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✗ contenu trop court ({len(content)})")
+            elif r and r.status_code == 403:
                 if VERBOSE:
-                    print(f"[VERBOSE]       ✓ code 200, taille {len(r.text)} → +1 point")
-                break
+                    print(f"[VERBOSE]       ✗ {url} -> 403 (ignoré)")
             else:
                 code = r.status_code if r else "N/A"
                 if VERBOSE:
-                    print(f"[VERBOSE]       ✗ code {code} ou contenu trop court")
+                    print(f"[VERBOSE]       ✗ code {code}")
         except Exception as e:
             if VERBOSE:
                 print(f"[VERBOSE]       ✗ erreur : {e}")
@@ -955,7 +840,6 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
     if VERBOSE:
         print("[VERBOSE]   Test 8 : vérification des headers")
     if home_headers:
-        # Joomla ajoute parfois X-Content-Encoded-By: Joomla!
         if "x-content-encoded-by" in home_headers:
             if "joomla" in home_headers["x-content-encoded-by"].lower():
                 score += 1
@@ -998,7 +882,6 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
 
     return {'score': score, 'version': version, 'source': source}
 
-
 def detect_prestashop_score(base, home_html=None, home_headers=None):
     """
     Score de détection PrestaShop.
@@ -1037,7 +920,10 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
         r = get(url)
         if r and r.status_code == 200:
             content = r.text
-            if len(content) > 100:
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                 m = re.search(r"_PS_VERSION_\s*=\s*'([^']+)'", content)
@@ -1055,6 +941,9 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
             else:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
@@ -1064,7 +953,7 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
             print(f"[VERBOSE]     ✗ erreur : {e}")
 
     # ===== TEST 3 : /config/defines.inc.php =====
-    if not version:  # si on a déjà une version, on saute
+    if not version:
         url = base + "/config/defines.inc.php"
         if VERBOSE:
             print(f"[VERBOSE]   Test 3 : {url}")
@@ -1072,7 +961,10 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
             r = get(url)
             if r and r.status_code == 200:
                 content = r.text
-                if len(content) > 100:
+                if home_html and is_home_redirect(content, home_html):
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+                elif len(content) > 100:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                     m = re.search(r"_PS_VERSION_\s*=\s*'([^']+)'", content)
@@ -1090,6 +982,9 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
                 else:
                     if VERBOSE:
                         print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+            elif r and r.status_code == 403:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
             else:
                 code = r.status_code if r else "N/A"
                 if VERBOSE:
@@ -1104,15 +999,30 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE]   Test 4 : {url}")
     try:
         r = get(url)
-        if r and r.status_code == 200 and len(r.content) > 100:
-            score += 1
-            sources.append("/img/logo.jpg existe")
+        if r and r.status_code == 200:
+            content = r.content
+            # Vérifier si c'est une image ou du HTML (redirection)
+            if home_html and len(content) > 100 and isinstance(content, bytes):
+                # Comparer les premiers octets avec la page d'accueil
+                if content[:100] == home_html[:100].encode():
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil (HTML), ignoré")
+                    return
+            if len(content) > 100:
+                score += 1
+                sources.append("/img/logo.jpg existe")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)} → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
             if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, taille {len(r.content)} → +1 point")
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+                print(f"[VERBOSE]     ✗ code {code}")
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
@@ -1123,15 +1033,28 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE]   Test 5 : {url}")
     try:
         r = get(url)
-        if r and r.status_code == 200 and len(r.content) > 100:
-            score += 1
-            sources.append("/themes/default/img/logo.jpg existe")
+        if r and r.status_code == 200:
+            content = r.content
+            if home_html and len(content) > 100 and isinstance(content, bytes):
+                if content[:100] == home_html[:100].encode():
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil (HTML), ignoré")
+                    return
+            if len(content) > 100:
+                score += 1
+                sources.append("/themes/default/img/logo.jpg existe")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)} → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
             if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, taille {len(r.content)} → +1 point")
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+                print(f"[VERBOSE]     ✗ code {code}")
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
@@ -1162,16 +1085,27 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
             print(f"[VERBOSE]     Test : {url}")
         try:
             r = get(url)
-            if r and r.status_code == 200 and len(r.text) > 100:
-                score += 1
-                sources.append(f"{path} existe")
+            if r and r.status_code == 200:
+                content = r.text
+                if home_html and is_home_redirect(content, home_html):
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✗ {url} redirige vers la page d'accueil, ignoré")
+                elif len(content) > 100:
+                    score += 1
+                    sources.append(f"{path} existe")
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ code 200, taille {len(content)} → +1 point")
+                    break
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✗ contenu trop court ({len(content)})")
+            elif r and r.status_code == 403:
                 if VERBOSE:
-                    print(f"[VERBOSE]       ✓ code 200, taille {len(r.text)} → +1 point")
-                break
+                    print(f"[VERBOSE]       ✗ {url} -> 403 (ignoré)")
             else:
                 code = r.status_code if r else "N/A"
                 if VERBOSE:
-                    print(f"[VERBOSE]       ✗ code {code} ou contenu trop court")
+                    print(f"[VERBOSE]       ✗ code {code}")
         except Exception as e:
             if VERBOSE:
                 print(f"[VERBOSE]       ✗ erreur : {e}")
@@ -1182,15 +1116,26 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE]   Test 8 : {url}")
     try:
         r = get(url)
-        if r and r.status_code == 200 and len(r.text) > 100:
-            score += 1
-            sources.append("/js/tools.js existe")
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
+                score += 1
+                sources.append("/js/tools.js existe")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)} → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
             if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+                print(f"[VERBOSE]     ✗ code {code}")
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
@@ -1207,7 +1152,6 @@ def detect_prestashop_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE] Score final PrestaShop : {score}")
 
     return {'score': score, 'version': version, 'source': source}
-
 
 def detect_magento_score(base, home_html=None, home_headers=None):
     """
@@ -1233,15 +1177,13 @@ def detect_magento_score(base, home_html=None, home_headers=None):
             if VERBOSE:
                 print(f"[VERBOSE]     ✓ meta generator trouvé : version {version} → +2 points")
         else:
-            # Magento 2 utilise parfois <meta name="generator" content="Magento 2"/>
             m2 = re.search(r'<meta name="generator" content="Magento 2[^"]*"', home_html, re.I)
             if m2:
-                # On extrait la version si possible
                 v_match = re.search(r'(\d+\.\d+\.\d+)', m2.group(0))
                 if v_match:
                     version = v_match.group(1)
                 else:
-                    version = "2.x"  # version approximative
+                    version = "2.x"
                 score += 2
                 sources.append(f"meta generator Magento (version {version})")
                 if VERBOSE:
@@ -1261,10 +1203,12 @@ def detect_magento_score(base, home_html=None, home_headers=None):
         r = get(url)
         if r and r.status_code == 200:
             content = r.text
-            if len(content) > 100:
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
-                # On cherche des indices de Magento 1
                 if "<config>" in content and "Magento" in content:
                     score += 2
                     sources.append("/app/etc/local.xml (Magento 1 config)")
@@ -1278,6 +1222,9 @@ def detect_magento_score(base, home_html=None, home_headers=None):
             else:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
@@ -1294,7 +1241,10 @@ def detect_magento_score(base, home_html=None, home_headers=None):
         r = get(url)
         if r and r.status_code == 200:
             content = r.text
-            if len(content) > 100:
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                 if "Magento" in content or "env.php" in content:
@@ -1310,6 +1260,9 @@ def detect_magento_score(base, home_html=None, home_headers=None):
             else:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
@@ -1324,15 +1277,26 @@ def detect_magento_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE]   Test 4 : {url}")
     try:
         r = get(url)
-        if r and r.status_code == 200 and len(r.text) > 100:
-            score += 1
-            sources.append("/js/varien/js.js existe")
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
+                score += 1
+                sources.append("/js/varien/js.js existe")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)} → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
             if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+                print(f"[VERBOSE]     ✗ code {code}")
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
@@ -1343,15 +1307,26 @@ def detect_magento_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE]   Test 5 : {url}")
     try:
         r = get(url)
-        if r and r.status_code == 200 and len(r.text) > 100:
-            score += 1
-            sources.append("/pub/static/_requirejs/.../require.js (Magento 2)")
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
+                score += 1
+                sources.append("/pub/static/_requirejs/.../require.js (Magento 2)")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)} → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
             if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+                print(f"[VERBOSE]     ✗ code {code}")
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
@@ -1362,15 +1337,26 @@ def detect_magento_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE]   Test 6 : {url}")
     try:
         r = get(url)
-        if r and r.status_code == 200 and len(r.text) > 100:
-            score += 1
-            sources.append("/skin/frontend/default/default/css/styles.css existe")
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
+                score += 1
+                sources.append("/skin/frontend/default/default/css/styles.css existe")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)} → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
             if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+                print(f"[VERBOSE]     ✗ code {code}")
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
@@ -1381,15 +1367,26 @@ def detect_magento_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE]   Test 7 : {url}")
     try:
         r = get(url)
-        if r and r.status_code == 200 and len(r.text) > 100:
-            score += 1
-            sources.append("/pub/static/frontend/Magento/luma/.../styles-l.css (Magento 2)")
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100:
+                score += 1
+                sources.append("/pub/static/frontend/Magento/luma/.../styles-l.css (Magento 2)")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, taille {len(content)} → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
             if VERBOSE:
-                print(f"[VERBOSE]     ✓ code 200, taille {len(r.text)} → +1 point")
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
-                print(f"[VERBOSE]     ✗ code {code} ou contenu trop court")
+                print(f"[VERBOSE]     ✗ code {code}")
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
@@ -1422,7 +1419,10 @@ def detect_magento_score(base, home_html=None, home_headers=None):
         r = get(url)
         if r and r.status_code == 200:
             content = r.text
-            if len(content) > 10:
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 10:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✓ code 200, taille {len(content)}")
                 m = re.search(r'(\d+\.\d+\.\d+)', content)
@@ -1440,6 +1440,9 @@ def detect_magento_score(base, home_html=None, home_headers=None):
             else:
                 if VERBOSE:
                     print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
         else:
             code = r.status_code if r else "N/A"
             if VERBOSE:
@@ -1460,6 +1463,225 @@ def detect_magento_score(base, home_html=None, home_headers=None):
         print(f"[VERBOSE] Score final Magento : {score}")
 
     return {'score': score, 'version': version, 'source': source}
+
+def detect_wordpress_score(base, home_html=None, home_headers=None):
+    """
+    Détection WordPress.
+    Retourne un dict avec score, version, source.
+    """
+    score = 0
+    version = None
+    sources = []
+
+    if VERBOSE:
+        print("[VERBOSE] ═══ Scoring WordPress ═══")
+        print(f"[VERBOSE] Cible : {base}")
+
+    # ===== TEST 1 : /wp-login.php =====
+    url = base + "/wp-login.php"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 1 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100 and "wordpress" in content.lower():
+                score += 2
+                sources.append(f"{url} (contient 'wordpress')")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, contient 'wordpress' (taille {len(content)}) → +2 points")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ code 200 mais contenu vide ou sans 'wordpress'")
+        elif r and r.status_code == 403:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 2 : /readme.html =====
+    url = base + "/readme.html"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 2 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 100 and "WordPress" in content:
+                score += 1
+                sources.append(f"{url} (contient 'WordPress')")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ code 200, contient 'WordPress' → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ code 200 mais pas de 'WordPress'")
+        elif r and r.status_code == 403:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 3 : /wp-includes/version.php =====
+    url = base + "/wp-includes/version.php"
+    if VERBOSE:
+        print(f"[VERBOSE]   Test 3 : {url}")
+    try:
+        r = get(url)
+        if r and r.status_code == 200:
+            content = r.text
+            if home_html and is_home_redirect(content, home_html):
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ {url} redirige vers la page d'accueil, ignoré")
+            elif len(content) > 50:
+                m = re.search(r"\$wp_version\s*=\s*'([\d.]+)'", content)
+                if m:
+                    version = m.group(1)
+                    score += 2
+                    sources.append(f"{url} (version extraite {version})")
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ version extraite : {version} → +2 points")
+                else:
+                    score += 1
+                    sources.append(f"{url} existe (pas de version)")
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ✓ fichier existe, pas de version → +1 point")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✗ contenu trop court ({len(content)})")
+        elif r and r.status_code == 403:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ {url} -> 403 (ignoré)")
+        else:
+            code = r.status_code if r else "N/A"
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ code {code}")
+    except Exception as e:
+        if VERBOSE:
+            print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 4 : headers X-Powered-By =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 4 : Headers X-Powered-By")
+    if home_headers and "x-powered-by" in home_headers:
+        if "wordpress" in home_headers["x-powered-by"].lower():
+            score += 1
+            sources.append("X-Powered-By: WordPress")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ contient 'wordpress' → +1 point")
+        else:
+            if VERBOSE:
+                print(f"[VERBOSE]     ✗ présent mais pas 'wordpress' : {home_headers['x-powered-by']}")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ absent")
+
+    # ===== TEST 5 : meta generator =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 5 : meta generator WordPress")
+    if home_html:
+        if re.search(r'<meta name="generator" content="WordPress', home_html, re.I):
+            score += 2
+            sources.append("meta generator WordPress")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ trouvé → +2 points")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ absent")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ pas de HTML")
+
+    # ===== TEST 6 : signaux HTML (UNIQUEMENT INTERNES) =====
+    if VERBOSE:
+        print("[VERBOSE]   Test 6 : Signaux HTML (seulement internes)")
+
+    target_domain = urlparse(base).netloc
+    if target_domain.startswith("www."):
+        target_domain = target_domain[4:]
+    if VERBOSE:
+        print(f"[VERBOSE]     Domaine cible (sans www) : {target_domain}")
+
+    internal_found = 0
+    external_found = 0
+
+    if home_html:
+        signals = ["/wp-content/", "/wp-includes/", "wp-json"]
+        for sig in signals:
+            pos = 0
+            while True:
+                idx = home_html.lower().find(sig, pos)
+                if idx == -1:
+                    break
+                start = max(0, idx - 80)
+                end = min(len(home_html), idx + len(sig) + 80)
+                context = home_html[start:end]
+                url_match = re.search(r'(https?://[^\s"\']+)', context)
+                if url_match:
+                    full_url = url_match.group(1)
+                    url_domain = urlparse(full_url).netloc
+                    if url_domain.startswith("www."):
+                        url_domain = url_domain[4:]
+                    if url_domain and url_domain == target_domain:
+                        internal_found += 1
+                        if VERBOSE:
+                            print(f"[VERBOSE]       ✓ Occurrence de '{sig}' → URL interne : {full_url}")
+                    else:
+                        external_found += 1
+                        if VERBOSE:
+                            print(f"[VERBOSE]       ✗ Occurrence de '{sig}' → URL externe ignorée : {full_url}")
+                else:
+                    internal_found += 1
+                    if VERBOSE:
+                        print(f"[VERBOSE]       ✓ Occurrence de '{sig}' → pas d'URL, considérée interne")
+                pos = idx + len(sig)
+
+        if VERBOSE:
+            print(f"[VERBOSE]     Résultat : {internal_found} interne(s), {external_found} externe(s) ignorée(s)")
+
+        if internal_found >= 2:
+            score += internal_found
+            sources.append(f"{internal_found} signaux HTML internes (+{internal_found} points)")
+            if VERBOSE:
+                print(f"[VERBOSE]   +{internal_found} points pour {internal_found} signaux internes")
+        elif internal_found == 1:
+            score += 1
+            sources.append(f"1 signal HTML interne")
+            if VERBOSE:
+                print(f"[VERBOSE]   +1 point : 1 signal interne")
+    else:
+        if VERBOSE:
+            print("[VERBOSE]     ✗ pas de HTML")
+
+    # Bonus version
+    if version:
+        score += 1
+        sources.append("version connue (bonus)")
+        if VERBOSE:
+            print(f"[VERBOSE]   Bonus +1 point pour version connue")
+
+    source = " ; ".join(sources) if sources else "aucun test positif"
+    if VERBOSE:
+        print(f"[VERBOSE]   Score final : {score}")
+        print("[VERBOSE] ═══ Fin scoring WordPress ═══")
+
+    return {'score': score, 'version': version, 'source': source}
+
 
 
 
@@ -1696,6 +1918,11 @@ def main():
     global VERBOSE
     if args.verbose:
         VERBOSE = True
+    import lib.paths
+    import modules.wordpress
+    lib.paths.VERBOSE = VERBOSE
+    modules.wordpress.VERBOSE = VERBOSE
+
     auto_update()
     
     if needs_wp_vuln_update():

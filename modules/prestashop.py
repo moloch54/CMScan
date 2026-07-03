@@ -21,7 +21,7 @@ class PrestaShopModule(BaseModule):
 
     def _paths_scan(self):
         section("Exposed Paths")
-        findings = check_paths(self.base, PRESTASHOP_SENSITIVE_PATHS)
+        findings = check_paths(self.base, PRESTASHOP_SENSITIVE_PATHS, home_content=self.html)
         if not findings:
             ok("No obviously exposed sensitive paths")
         for p in findings:

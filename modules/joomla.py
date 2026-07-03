@@ -32,7 +32,7 @@ class JoomlaModule(BaseModule):
         from lib.paths import check_paths, JOOMLA_SENSITIVE_PATHS
         from lib.colors import section, ok, sev_color
         section("Exposed Paths")
-        findings = check_paths(self.base, JOOMLA_SENSITIVE_PATHS)
+        findings = check_paths(self.base, JOOMLA_SENSITIVE_PATHS, home_content=self.html)
         if not findings:
             ok("No obviously exposed sensitive paths")
         for p in findings:

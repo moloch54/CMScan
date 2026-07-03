@@ -25,7 +25,24 @@ def get(url, **kw):
         return r
     except:
         return None
-
+def is_redirect_to_home(content, home_html):
+    """
+    Vérifie si le contenu est celui de la page d'accueil (redirection ou rewriting).
+    """
+    if not home_html or not content:
+        return False
+    # Si les contenus sont identiques (ou très proches), on considère que c'est une redirection
+    if len(content) == len(home_html) and content == home_html:
+        return True
+    # Si les longueurs sont proches et le titre est le même, on peut aussi détecter
+    # On vérifie aussi la présence de balises communes comme <html>, <head>, etc.
+    # On peut faire une comparaison de similarité simple (ex: ratio de Jaccard)
+    # Ici, on va comparer les 200 premiers caractères pour éviter les différences mineures
+    if len(content) > 100 and len(home_html) > 100:
+        if content[:200] == home_html[:200]:
+            return True
+    return False
+    
 def _cmseek_getsource(url, ua):
     try:
         # 1. Essayer curl_cffi (si disponible)
