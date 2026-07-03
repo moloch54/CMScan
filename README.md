@@ -5,7 +5,7 @@ Il détecte les versions, énumère les utilisateurs, vérifie les vulnérabilit
 
 ## Fonctionnalités
 
-- ✅ Détection de 4 CMS : WordPress, Drupal, Joomla, PrestaShop
+- ✅ Détection de 5 CMS : WordPress, Drupal, Joomla, PrestaShop, Magento
 - ✅ Énumération des utilisateurs (méthodes WP, Drupal, Joomla, PrestaShop)
 - ✅ Vérification des vulnérabilités via :
     - [wpvulnerability.net](https://www.wpvulnerability.net/) (WordPress)
