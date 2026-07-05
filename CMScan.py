@@ -174,7 +174,7 @@ try:
     with open("version.txt", "r") as f:
         VERSION = f.read().strip()
 except:
-    VERSION = "3.7"
+    VERSION = "3.8"
 
 BANNER = f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
@@ -1760,7 +1760,7 @@ def detect_cms(base):
                 if VERBOSE:
                     print(f"[VERBOSE] Erreur pour {name} : {e}")
                 results[name] = {'score': 0, 'version': None, 'source': ''}
-                
+
     # Traitement des résultats
     for name, result in results.items():
         if result['score'] >= SEUIL:
