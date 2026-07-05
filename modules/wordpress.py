@@ -12,6 +12,7 @@ from lib.vuln import check_vulns_friendsofphp
 from modules.base import BaseModule, Vuln
 import urllib.request
 import time
+import lib.http
 VERBOSE = False
 
 class WordPressModule(BaseModule):
@@ -24,11 +25,14 @@ class WordPressModule(BaseModule):
         self.SPIDERS_DIR = "vulnDatabase/spiders"
 
     def scan(self):
+ 
         self._paths_scan()
         self._core_scan()
         self._themes_scan()
         self._plugins_scan()
+        time.sleep(2)
         self._authors_scan()
+
         return self.result
 
     def _core_scan(self):
@@ -115,6 +119,7 @@ class WordPressModule(BaseModule):
                     print_vuln(v)
 
     def _authors_scan(self):
+        time.sleep(3)
         section("Authors")
         usernames = self._harvest_usernames_wp()
         if usernames:
@@ -230,27 +235,57 @@ class WordPressModule(BaseModule):
     def _harvest_usernames_wp(self):
         import requests
         import time
+        import random
         usernames = set()
-        
-        # Liste d'User-Agents (copiée de WPscrap)
-        user_agents = [
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:53.0) Gecko/20100101 Firefox/53.0',
-            'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0; Trident/5.0; Trident/5.0)',
-            'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Trident/6.0; MDDCJS)',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.79 Safari/537.36 Edge/14.14393',
-            'Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1)'
-        ]
-        
+ 
+        ua = lib.http.FIXED_UA  
         if VERBOSE:
             print(f"[DEBUG] _harvest_usernames_wp: début pour {self.base}")
 
-        # 1. API REST
+        # Pause initiale (comme WPscrap)
+        time.sleep(2)
+
+        # 3. Feed RSS (avec retry sur 503)
         if VERBOSE:
-            print("[DEBUG]   → Source 1: wp-json API")
+            print("[DEBUG]   → Source 3: feed RSS")
+        feed_ok = False
+        for attempt in range(3):
+            try:
+                headers = {'User-Agent': ua}
+                r = requests.get(self.base + "/feed", headers=headers, timeout=15)
+                if r.status_code == 200:
+                    feed_users = re.findall(r'<dc:creator>[\n\s]*<!\[CDATA\[([\w\s\-]+)\]', r.text)
+                    if not feed_users:
+                        feed_users = re.findall(r"<dc:creator>([^<]+)<", r.text)
+                    if VERBOSE:
+                        print(f"[DEBUG]   → Feed RSS OK, {len(feed_users)} utilisateurs")
+                    for username in feed_users:
+                        username = username.strip()
+                        if username and username not in usernames:
+                            usernames.add(username)
+                            print(f"    {C.GREEN}[+]{C.RST} Found user from feed: {C.BOLD}{username}{C.RST}")
+                    feed_ok = True
+                    break
+                elif r.status_code == 503:
+                    if VERBOSE:
+                        print(f"[DEBUG]   → Feed RSS 503, tentative {attempt+1}/3, attente {2 ** attempt}s")
+                    time.sleep(2 ** attempt)  # 2s, 4s, 8s
+                else:
+                    if VERBOSE:
+                        print(f"[DEBUG]   → Feed RSS échoué (status {r.status_code})")
+                    break
+            except Exception as e:
+                if VERBOSE:
+                    print(f"[DEBUG]   → Feed RSS tentative {attempt+1} exception: {e}")
+                time.sleep(2 ** attempt)
+        if not feed_ok and VERBOSE:
+            print("[DEBUG]   → Feed RSS abandonné après 3 tentatives")
+
+        # 2. API REST
+        if VERBOSE:
+            print("[DEBUG]   → Source 2: wp-json API")
         try:
-            headers = {'User-Agent': random.choice(user_agents)}
+            headers = {'User-Agent': ua}
             r = requests.get(self.base + "/wp-json/wp/v2/users", headers=headers, timeout=10)
             if r.status_code == 200:
                 data = r.json()
@@ -268,12 +303,12 @@ class WordPressModule(BaseModule):
             if VERBOSE:
                 print(f"[DEBUG]   → wp-json exception: {e}")
 
-        # 2. ?author= redirection
+        # 3. ?author= redirection (bruteforce, après le feed)
         if VERBOSE:
-            print("[DEBUG]   → Source 2: ?author= redirection (1 à 20)")
+            print("[DEBUG]   → Source 3: ?author= redirection (1 à 20)")
         for i in range(1, 21):
             try:
-                headers = {'User-Agent': random.choice(user_agents)}
+                headers = {'User-Agent': ua}
                 r = requests.get(self.base + f"/?author={i}", headers=headers, timeout=10, allow_redirects=True)
                 if r.status_code == 200:
                     final_url = r.url
@@ -306,34 +341,6 @@ class WordPressModule(BaseModule):
             except Exception as e:
                 if i <= 3 and VERBOSE:
                     print(f"[DEBUG]   → ?author={i} échec: {e}")
-
-        # 3. Feed RSS (avec retry)
-        if VERBOSE:
-            print("[DEBUG]   → Source 3: feed RSS")
-        for attempt in range(3):
-            try:
-                headers = {'User-Agent': random.choice(user_agents)}
-                r = requests.get(self.base + "/feed", headers=headers, timeout=10)
-                if r.status_code == 200:
-                    feed_users = re.findall(r"<dc:creator>([^<]+)<", r.text)
-                    if not feed_users:
-                        feed_users = re.findall(r"<dc:creator>\s*<!\[CDATA\[([^\]]+)\]\]>", r.text)
-                    if VERBOSE:
-                        print(f"[DEBUG]   → Feed RSS OK, {len(feed_users)} utilisateurs")
-                    for username in feed_users:
-                        username = username.strip()
-                        if username and username not in usernames:
-                            usernames.add(username)
-                            print(f"    {C.GREEN}[+]{C.RST} Found user from feed: {C.BOLD}{username}{C.RST}")
-                    break
-                else:
-                    if VERBOSE:
-                        print(f"[DEBUG]   → Feed RSS tentative {attempt+1} échouée (status {r.status_code})")
-                    time.sleep(1)
-            except Exception as e:
-                if VERBOSE:
-                    print(f"[DEBUG]   → Feed RSS tentative {attempt+1} exception: {e}")
-                time.sleep(1)
 
         if VERBOSE:
             print(f"[DEBUG] _harvest_usernames_wp: fin, {len(usernames)} utilisateur(s)")

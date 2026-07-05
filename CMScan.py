@@ -1743,7 +1743,7 @@ def detect_cms(base):
     ]
     
     results = {}
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         future_to_name = {
             executor.submit(detector, base, home_html, home_headers): name
             for name, detector in detectors
@@ -1751,12 +1751,16 @@ def detect_cms(base):
         for future in as_completed(future_to_name):
             name = future_to_name[future]
             try:
-                results[name] = future.result()
+                result = future.result()
+                if result is None:
+                    results[name] = {'score': 0, 'version': None, 'source': ''}
+                else:
+                    results[name] = result
             except Exception as e:
                 if VERBOSE:
                     print(f"[VERBOSE] Erreur pour {name} : {e}")
                 results[name] = {'score': 0, 'version': None, 'source': ''}
-    
+                
     # Traitement des résultats
     for name, result in results.items():
         if result['score'] >= SEUIL:
@@ -1918,6 +1922,9 @@ def main():
     global VERBOSE
     if args.verbose:
         VERBOSE = True
+    import lib.http
+    import random
+    lib.http.FIXED_UA = random.choice(lib.http.USER_AGENTS)
     import lib.paths
     import modules.wordpress
     lib.paths.VERBOSE = VERBOSE

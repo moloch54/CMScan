@@ -6,6 +6,9 @@ import urllib3
 from http.cookiejar import CookieJar
 from urllib.parse import urlparse
 
+# Variable globale pour l'User-Agent fixe
+FIXED_UA = None
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
@@ -16,15 +19,21 @@ USER_AGENTS = [
 ]
 
 def get(url, **kw):
+    global FIXED_UA
     timeout = kw.get("timeout", 6)
     allow_redirects = kw.get("allow_redirects", True)
     headers = kw.get("headers", {})
-    headers["User-Agent"] = random.choice(USER_AGENTS)
+    if FIXED_UA:
+        headers["User-Agent"] = FIXED_UA
+    else:
+        headers["User-Agent"] = random.choice(USER_AGENTS)
     try:
         r = requests.get(url, timeout=timeout, verify=False, allow_redirects=allow_redirects, headers=headers)
         return r
     except:
         return None
+
+
 def is_redirect_to_home(content, home_html):
     """
     Vérifie si le contenu est celui de la page d'accueil (redirection ou rewriting).

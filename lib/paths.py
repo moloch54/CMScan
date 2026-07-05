@@ -232,14 +232,14 @@ def check_paths(base, path_list, home_content=None):
                 "status": 200
             })
 
-    threads = []
-    for entry in path_list:
-        t = threading.Thread(target=check_one, args=(entry,), daemon=True)
-        t.start()
-        threads.append(t)
-
-    for t in threads:
-        t.join(timeout=8)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {executor.submit(check_one, entry): entry for entry in path_list}
+        for future in as_completed(futures):
+            try:
+                future.result(timeout=8)
+            except Exception:
+                pass
 
     sev_ord = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     findings.sort(key=lambda x: sev_ord.get(x["severity"], 4))
