@@ -114,6 +114,36 @@ MAGENTO_SENSITIVE_PATHS = [
     {"path": "/pub/static/frontend/Magento/luma/en_US/css/styles-l.css", "severity": "LOW", "description": "Magento 2 CSS"},
 ]
 
+SHOPIFY_SENSITIVE_PATHS = [
+    {"path": "/admin", "severity": "MEDIUM", "description": "Admin panel"},
+    {"path": "/admin/themes", "severity": "LOW", "description": "Themes management"},
+    {"path": "/admin/products", "severity": "LOW", "description": "Products"},
+    {"path": "/admin/collections", "severity": "LOW", "description": "Collections"},
+    {"path": "/admin/customers", "severity": "LOW", "description": "Customers"},
+    {"path": "/admin/orders", "severity": "LOW", "description": "Orders"},
+    {"path": "/admin/settings", "severity": "MEDIUM", "description": "Settings"},
+    {"path": "/admin/pages", "severity": "LOW", "description": "Pages"},
+    {"path": "/admin/blog", "severity": "LOW", "description": "Blog"},
+    {"path": "/admin/assets", "severity": "LOW", "description": "Assets"},
+    {"path": "/admin/analytics", "severity": "LOW", "description": "Analytics"},
+    {"path": "/admin/reports", "severity": "LOW", "description": "Reports"},
+    {"path": "/admin/emails", "severity": "LOW", "description": "Emails"},
+    {"path": "/admin/shipping", "severity": "LOW", "description": "Shipping"},
+    {"path": "/admin/payments", "severity": "LOW", "description": "Payments"},
+    {"path": "/admin/taxes", "severity": "LOW", "description": "Taxes"},
+    {"path": "/admin/oauth", "severity": "LOW", "description": "OAuth"},
+    {"path": "/admin/apps", "severity": "LOW", "description": "Apps"},
+    {"path": "/admin/charges", "severity": "LOW", "description": "Charges"},
+    {"path": "/admin/webhooks", "severity": "LOW", "description": "Webhooks"},
+    {"path": "/cart", "severity": "LOW", "description": "Cart"},
+    {"path": "/checkout", "severity": "LOW", "description": "Checkout"},
+    {"path": "/collections", "severity": "LOW", "description": "Collections listing"},
+    {"path": "/products", "severity": "LOW", "description": "Products listing"},
+    {"path": "/pages", "severity": "LOW", "description": "Pages listing"},
+    {"path": "/blogs", "severity": "LOW", "description": "Blogs"},
+]
+
+
 
 def _is_404(text):
     patterns = ["404 Not Found", "Page not found", "The requested URL was not found",

@@ -1682,9 +1682,143 @@ def detect_wordpress_score(base, home_html=None, home_headers=None):
 
     return {'score': score, 'version': version, 'source': source}
 
+import re
+import json
 
+def detect_shopify_score(base, home_html=None, home_headers=None, verbose=False):
+    """
+    Score de détection Shopify basé sur l'analyse du HTML et des en-têtes.
+    Retourne un dict avec score, version, source.
+    """
+    score = 0
+    version = None
+    sources = []
+    total_indicators = 0
 
+    if verbose:
+        print("[VERBOSE] --- Scoring Shopify ---")
 
+    if not home_html:
+        if verbose:
+            print("[VERBOSE]   Pas de HTML fourni, score=0")
+        return {'score': 0, 'version': None, 'source': 'pas de HTML'}
+
+    html = home_html.lower()
+
+    # -------- INDICATEURS STRUCTURELS (forts) --------
+    strong_indicators = [
+        (r'<meta name="shopify-checkout-api-token"', "meta checkout token"),
+        (r'<meta name="shopify-digital-wallet"', "meta digital wallet"),
+        (r'window\.Shopify\s*=', "objet global Shopify"),
+        (r'cdn\.shopify\.com', "CDN Shopify"),
+        (r'cdn\.shopifycloud\.com', "CDN Shopify Cloud"),
+        (r'myshopify\.com', "domaine myshopify.com"),
+        (r'shopify\.shop', "domaine shopify.shop"),
+        (r'<link rel="canonical"[^>]*myshopify\.com', "canonique myshopify"),
+        (r'"shopify"', "mot-clé shopify dans un attribut ou contenu"),
+    ]
+
+    for pattern, label in strong_indicators:
+        if re.search(pattern, html, re.I):
+            score += 2
+            sources.append(label)
+            total_indicators += 1
+            if verbose:
+                print(f"[VERBOSE]   ✓ {label} → +2 points")
+
+    # -------- INDICATEURS SCRIPT (fréquents) --------
+    script_sources = re.findall(r'<script[^>]*src=["\']([^"\']+)["\']', home_html, re.I)
+    shopify_script_count = 0
+    for src in script_sources:
+        if 'shopify' in src.lower() or 'shopifycloud' in src.lower() or 'cdn.shopify.com' in src.lower():
+            shopify_script_count += 1
+    if shopify_script_count >= 3:
+        score += 3
+        sources.append(f"{shopify_script_count} scripts Shopify")
+        if verbose:
+            print(f"[VERBOSE]   ✓ {shopify_script_count} scripts Shopify → +3 points")
+    elif shopify_script_count >= 1:
+        score += 1
+        sources.append(f"{shopify_script_count} script(s) Shopify")
+        if verbose:
+            print(f"[VERBOSE]   ✓ {shopify_script_count} script(s) Shopify → +1 point")
+
+    # -------- INDICATEURS DE CSS/CLASSES --------
+    class_patterns = ['shopify-section', 'shopify-payment-button', 'product-form', 'cart-drawer']
+    found_classes = [p for p in class_patterns if p in html]
+    if found_classes:
+        score += len(found_classes)
+        sources.append(f"classes Shopify: {', '.join(found_classes)}")
+        if verbose:
+            print(f"[VERBOSE]   ✓ classes Shopify trouvées ({len(found_classes)}) → +{len(found_classes)} points")
+
+    # -------- INDICATEURS DE META (autres) --------
+    meta_patterns = [
+        (r'<meta name="google-site-verification"', "meta google verification"),
+        (r'<meta name="shopify"', "meta shopify"),
+        (r'<link rel="alternate" hreflang="[^"]*" href="[^"]*myshopify\.com', "alternate myshopify"),
+    ]
+    for pattern, label in meta_patterns:
+        if re.search(pattern, html, re.I):
+            score += 1
+            sources.append(label)
+            if verbose:
+                print(f"[VERBOSE]   ✓ {label} → +1 point")
+
+    # -------- DÉTECTION DE VERSION --------
+    # via header
+    if home_headers and 'x-shopify-version' in home_headers:
+        version = home_headers['x-shopify-version']
+        score += 1
+        sources.append(f"version header: {version}")
+        if verbose:
+            print(f"[VERBOSE]   ✓ version depuis header ({version}) → +1 point")
+    else:
+        # via JS
+        m = re.search(r'Shopify\.version\s*=\s*["\']([\d.]+)["\']', home_html, re.I)
+        if m:
+            version = m.group(1)
+            score += 1
+            sources.append(f"version JS: {version}")
+            if verbose:
+                print(f"[VERBOSE]   ✓ version depuis JS ({version}) → +1 point")
+
+        # via données JSON dans script
+        m = re.search(r'<script[^>]*type="application/json"[^>]*>.*?"version":\s*"([\d.]+)".*?</script>', home_html, re.I)
+        if m and not version:
+            version = m.group(1)
+            score += 1
+            sources.append(f"version JSON: {version}")
+            if verbose:
+                print(f"[VERBOSE]   ✓ version depuis JSON ({version}) → +1 point")
+
+    # -------- BONUS SI BEAUCOUP D'INDICATEURS --------
+    if total_indicators >= 5:
+        score += 2
+        sources.append("bonus pour nombreux indicateurs")
+        if verbose:
+            print("[VERBOSE]   Bonus +2 points pour 5+ indicateurs")
+    elif total_indicators >= 3:
+        score += 1
+        sources.append("bonus pour indicateurs modérés")
+        if verbose:
+            print("[VERBOSE]   Bonus +1 point pour 3+ indicateurs")
+
+    # -------- SEUIL MINIMUM POUR ÉVITER LES FAUX POSITIFS --------
+    # Si le score est < 2, on le met à 0 pour être sûr
+    if score < 2:
+        score = 0
+        sources = ["aucun indicateur fiable"]
+
+    if verbose:
+        print(f"[VERBOSE] Score final Shopify : {score}")
+
+    return {
+        'score': score,
+        'version': version,
+        'source': ' ; '.join(sources) if sources else 'aucun test positif'
+    }
+    
 # ──────────────────────────────────────────────────────────────
 # 4. DÉTECTION GÉNÉRIQUE (priorité WordPress sans Playwright)
 # ──────────────────────────────────────────────────────────────
@@ -1740,6 +1874,7 @@ def detect_cms(base):
         ("joomla", detect_joomla_score),
         ("prestashop", detect_prestashop_score),
         ("magento", detect_magento_score),
+        ("shopify", detect_shopify_score),
     ]
     
     results = {}
@@ -1803,7 +1938,7 @@ def scan(target, csv_out):
     print(f"{C.CYAN}{C.BOLD}{'═'*66}{C.RST}")
 
     section("CMS Detection")
-    cms_list = detect_cms(base)  # retourne une liste
+    cms_list = detect_cms(base)
 
     if not cms_list:
         warn("No CMS detected or supported")
@@ -1820,26 +1955,40 @@ def scan(target, csv_out):
         else:
             warn(f"      Version not detected for {cms}")
 
-    # On va scanner chaque CMS
+    # ------------------------------------------------------------
+    # 1. On prépare des variables pour cumuler les infos
+    # ------------------------------------------------------------
     all_vulns = []
     all_headers_issues = []
+    all_authors = []
+    all_emails = []
+    all_paths = []
     first_cms = True
+    meta = {}          # pour stocker les meta extraites
+    headers_issues = []  # pour les headers
 
+    # ------------------------------------------------------------
+    # 2. Boucle sur chaque CMS détecté
+    # ------------------------------------------------------------
     for cms_info in cms_list:
         cms = cms_info['cms']
         print(f"\n{C.CYAN}{C.BOLD}── Scanning {cms.capitalize()} ──{C.RST}")
 
-        # Meta et Headers : on les affiche une seule fois (pour le premier CMS)
+        # ==== Meta et Headers : une seule fois (pour le premier CMS) ====
         if first_cms:
             section("Meta / Site Info")
             meta = extract_meta(base, cms_info.get("html", ""))
             if meta["title"]:       print(f"  Title       : {meta['title']}")
             if meta["description"]: print(f"  Description : {meta['description']}")
-            if meta["emails"]:      print(f"  {C.ORANGE}Emails : {', '.join(meta['emails'][:5])}{C.RST}")
+            if meta["emails"]:
+                print(f"  {C.ORANGE}Emails : {', '.join(meta['emails'][:5])}{C.RST}")
+                all_emails = meta.get("emails", [])
+            if meta.get("authors"):
+                all_authors = meta.get("authors", [])
 
             section("Security Headers")
             headers_issues = audit_headers(cms_info.get("resp_headers", {}))
-            all_headers_issues.extend(headers_issues)
+            all_headers_issues = headers_issues
             if not headers_issues:
                 ok("All key security headers present")
             else:
@@ -1849,7 +1998,7 @@ def scan(target, csv_out):
                 display_headers_info(cms_info.get("resp_headers", {}))
             first_cms = False
 
-        # Lancer le module spécifique
+        # ==== Lancer le module spécifique ====
         if cms == "wordpress":
             from modules.wordpress import WordPressModule
             module = WordPressModule(base, cms_info)
@@ -1867,18 +2016,33 @@ def scan(target, csv_out):
             module = PrestaShopModule(base, cms_info)
             result = module.scan()
         elif cms == "magento":
-            # Si vous avez un module Magento, sinon ignorer
             from modules.magento import MagentoModule
             module = MagentoModule(base, cms_info)
+            result = module.scan()
+        elif cms == "shopify":
+            from modules.shopify import ShopifyModule
+            module = ShopifyModule(base, cms_info)
             result = module.scan()
         else:
             warn(f"Module for {cms} not available")
             continue
 
+        # ==== ON INJECTE TOUTES LES INFOS DANS result ====
+        result.emails = all_emails
+        result.headers = headers_issues
+        result.authors = all_authors
+        # On cumule aussi les paths si le module en a trouvé
+        if result.paths:
+            all_paths.extend(result.paths)
+        else:
+            result.paths = []   # pour éviter None
+
         # Cumul des vulnérabilités
         all_vulns.extend(result.vulns)
 
-    # Résumé global
+    # ------------------------------------------------------------
+    # 3. Résumé global
+    # ------------------------------------------------------------
     print(f"\n{C.CYAN}{C.BOLD}{'─'*66}{C.RST}")
     print(f"{C.CYAN}{C.BOLD}  SUMMARY — {base}{C.RST}")
     print(f"{C.CYAN}{C.BOLD}{'─'*66}{C.RST}")
@@ -1891,30 +2055,45 @@ def scan(target, csv_out):
     print(f"  {C.ORANGE}Medium vulns        : {len(med)}{C.RST}")
     print(f"  {C.YELLOW}Low vulns           : {len(low)}{C.RST}")
     print(f"  {C.ORANGE}Header issues       : {len(all_headers_issues)}{C.RST}")
+    print(f"  {C.CYAN}Authors             : {len(all_authors)}{C.RST}")
+    print(f"  {C.CYAN}Emails              : {len(all_emails)}{C.RST}")
+    print(f"  {C.CYAN}Exposed paths       : {len(all_paths)}{C.RST}")
 
-    # Affichage des versions des CMS détectés
+    # Affichage des versions
     version_str = ", ".join([f"{d['cms']} ({d['version'] or '?'})" for d in cms_list])
     print(f"  {C.GREEN}Detected CMS versions : {version_str}{C.RST}")
 
-    # Export CSV combiné
+    # ------------------------------------------------------------
+    # 4. Export CSV combiné (avec TOUTES les données)
+    # ------------------------------------------------------------
     class CombinedResult:
-        def __init__(self, vulns, cms_list):
+        def __init__(self, vulns, cms_list, authors, emails, paths, headers):
             self.vulns = vulns
             self.cms = "multiple"
             self.version = ", ".join([f"{d['cms']} {d['version'] or '?'}" for d in cms_list])
-            self.paths = []
-            self.headers = []
+            self.authors = authors
+            self.emails = emails
+            self.paths = paths
+            self.headers = headers
             self.target = base
 
-    combined = CombinedResult(all_vulns, cms_list)
+    combined = CombinedResult(
+        vulns=all_vulns,
+        cms_list=cms_list,
+        authors=all_authors,
+        emails=all_emails,
+        paths=all_paths,
+        headers=all_headers_issues
+    )
     export_csv(combined, csv_out)
     print(f"{C.DIM}→ Results appended to {csv_out}{C.RST}")
     print("")
+    
 
 def main():
     parser = argparse.ArgumentParser(description="CMScan — Unified CMS Scanner")
-    parser.add_argument("-L", metavar="TARGET", required=False, help="Target URL")
-    parser.add_argument("-o", "--output", help="CSV output file")
+    parser.add_argument("-L", metavar="TARGET", required=False, help="Target URL or file with list of URLs (e.g. sites.txt)")
+    parser.add_argument("-o", "--output", help="CSV output file (ignored if -L is a file, uses auto-generated names)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode")
     parser.add_argument("--update", action="store_true", help="Update vulnerability databases")
     args = parser.parse_args()
@@ -1922,6 +2101,7 @@ def main():
     global VERBOSE
     if args.verbose:
         VERBOSE = True
+
     import lib.http
     import random
     lib.http.FIXED_UA = random.choice(lib.http.USER_AGENTS)
@@ -1945,14 +2125,35 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    target = args.L
-    if args.output:
-        csv_out = args.output
-    else:
-        from lib.csv_export import generate_csv_filename
-        csv_out = generate_csv_filename(target)
+    # ===== GESTION DU FICHIER =====
+    from lib.csv_export import generate_csv_filename
 
-    scan(target, csv_out)
+    target_input = args.L
+    if not os.path.isfile(target_input):
+        # essai relatif au script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        alt_path = os.path.join(script_dir, target_input)
+        if os.path.isfile(alt_path):
+            target_input = alt_path
+            print(f"[DEBUG] trouvé via alt_path = '{alt_path}'")
+
+    if os.path.isfile(target_input):
+        print("file found")
+        with open(target_input, "r") as f:
+            targets = [line.strip() for line in f if line.strip()]
+        if not targets:
+            warn("No targets found in file.")
+            sys.exit(1)
+        for target in targets:
+            csv_out = generate_csv_filename(target)
+            scan(target, csv_out)
+    else:
+        # C'est une URL unique
+        if args.output:
+            csv_out = args.output
+        else:
+            csv_out = generate_csv_filename(target_input)
+        scan(target_input, csv_out)
 
 if __name__ == "__main__":
     main()
