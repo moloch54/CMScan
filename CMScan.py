@@ -178,7 +178,7 @@ except:
 
 BANNER = f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
-║   CMScan v{VERSION} — Unified CMS Security Scanner             ║
+║   CMScan v{VERSION} — Unified CMS Security Scanner           ║
 ║   Augmented CyberSecurity                                ║
 ╚══════════════════════════════════════════════════════════╝{C.RST}"""
 
@@ -2026,6 +2026,10 @@ def scan(target, csv_out):
         else:
             warn(f"Module for {cms} not available")
             continue
+
+        # ==== ON MET À JOUR LA VERSION DANS cms_info POUR LE SUMMARY ====
+        if result.version:
+            cms_info['version'] = result.version   # <--- AJOUTE CETTE LIGNE
 
         # ==== ON INJECTE TOUTES LES INFOS DANS result ====
         result.emails = all_emails
