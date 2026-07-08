@@ -39,10 +39,26 @@ def is_home_redirect(content, home_html):
     """
     if not home_html or not content:
         return False
-    # Si les longueurs sont proches et les premiers 500 caractères identiques
+    
+    # Comparer les titres
+    title_home = re.search(r'<title>([^<]+)</title>', home_html, re.I)
+    title_content = re.search(r'<title>([^<]+)</title>', content, re.I)
+    if title_home and title_content:
+        if title_home.group(1).strip() == title_content.group(1).strip():
+            return True
+    
+    # Comparer les meta generator
+    gen_home = re.search(r'<meta name="generator" content="([^"]+)"', home_html, re.I)
+    gen_content = re.search(r'<meta name="generator" content="([^"]+)"', content, re.I)
+    if gen_home and gen_content:
+        if gen_home.group(1) == gen_content.group(1):
+            return True
+    
+    # Fallback : comparer les 500 premiers caractères si les titres sont vides
     if len(content) > 200 and len(home_html) > 200:
         if content[:500] == home_html[:500]:
             return True
+    
     return False
 
 def is_same_domain(domain1, domain2):
@@ -277,6 +293,7 @@ def _extract_wp_version(base):
 # ──────────────────────────────────────────────────────────────
 # 3. DÉTECTIONS PAR CMS
 # ──────────────────────────────────────────────────────────────
+
 def detect_drupal_score(base, home_html=None, home_headers=None):
     """
     Score de détection Drupal.
@@ -296,7 +313,7 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
         m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', home_html, re.I)
         if m:
             version = m.group(1)
-            score += 2
+            score += 3
             sources.append(f"meta generator Drupal (version {version})")
             if VERBOSE:
                 print(f"[VERBOSE]     ✓ meta generator trouvé : version {version} → +2 points")
@@ -522,6 +539,22 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
     except Exception as e:
         if VERBOSE:
             print(f"[VERBOSE]     ✗ erreur : {e}")
+
+    # ===== TEST 8 : attributs data-drupal dans le HTML (NOUVEAU) =====
+    if home_html:
+        if VERBOSE:
+            print("[VERBOSE]   Test 8 : recherche d'attributs data-drupal dans le HTML")
+        count = len(re.findall(r'data-drupal', home_html, re.I))
+        if count > 0:
+            # On ajoute un point par occurrence, limité à 5 pour éviter de trop gonfler
+            points = min(count, 5)
+            score += points
+            sources.append(f"{count} occurrences de data-drupal (+{points} points)")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ {count} occurrences de 'data-drupal' trouvées → +{points} points")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de 'data-drupal' trouvé")
 
     # Bonus si version trouvée
     if version:

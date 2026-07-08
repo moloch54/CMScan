@@ -1,0 +1,124 @@
+
+[96m[1m╔══════════════════════════════════════════════════════════╗
+║   CMScan v3.8.1 — Unified CMS Security Scanner           ║
+║   Augmented CyberSecurity                                ║
+╚══════════════════════════════════════════════════════════╝[0m
+
+[96m[1m══════════════════════════════════════════════════════════════════[0m
+[96m[1m  TARGET: https://caf.fr[0m
+[96m[1m══════════════════════════════════════════════════════════════════[0m
+[94m[1m[CMS Detection][0m
+[VERBOSE] detect_cms: appelée pour https://caf.fr
+[VERBOSE] Page d'accueil récupérée (13959 caractères)
+[VERBOSE] ═══ Scoring WordPress ═══
+[VERBOSE] Cible : https://caf.fr
+[VERBOSE]   Test 1 : https://caf.fr/wp-login.php
+[VERBOSE] --- Scoring Drupal ---
+[VERBOSE]   Test 1 : recherche meta generator Drupal dans le HTML
+[VERBOSE]     ✗ pas de meta generator Drupal
+[VERBOSE]   Test 2 : https://caf.fr/core/CHANGELOG.txt
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 3 : https://caf.fr/CHANGELOG.txt
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 4 : https://caf.fr/core/package.json
+[VERBOSE]     ✗ code 200 mais contenu vide ou sans 'wordpress'
+[VERBOSE]   Test 2 : https://caf.fr/readme.html
+[VERBOSE]     ✓ code 200, taille 13959
+[VERBOSE]       ✗ JSON invalide
+[VERBOSE]   Test 5 : vérification des headers
+[VERBOSE]     ✗ pas de X-Generator
+[VERBOSE]     ✗ pas de X-Drupal-Cache
+[VERBOSE]   Test 6 : https://caf.fr/misc/drupal.js
+[VERBOSE]     ✗ code 200 mais pas de 'WordPress'
+[VERBOSE]   Test 3 : https://caf.fr/wp-includes/version.php
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 7 : https://caf.fr/core/misc/drupal.js
+[VERBOSE]     ✓ code 200, taille 21057 → +1 point
+[VERBOSE]   Test 8 : recherche d'attributs data-drupal dans le HTML
+[VERBOSE]     ✗ pas de 'data-drupal' trouvé
+[VERBOSE] Score final Drupal : 1
+[VERBOSE] --- Scoring Joomla ---
+[VERBOSE]   Recherche de la base Joomla (sous-dossiers possibles)
+[VERBOSE]     Test : https://caf.fr/administrator
+[VERBOSE]     ✓ fichier existe, pas de version → +1 point
+[VERBOSE]   Test 4 : Headers X-Powered-By
+[VERBOSE]     ✗ absent
+[VERBOSE]   Test 5 : meta generator WordPress
+[VERBOSE]     ✗ absent
+[VERBOSE]   Test 6 : Signaux HTML (seulement internes)
+[VERBOSE]     Domaine cible (sans www) : caf.fr
+[VERBOSE]     Résultat : 0 interne(s), 0 externe(s) ignorée(s)
+[VERBOSE]   Score final : 1
+[VERBOSE] ═══ Fin scoring WordPress ═══
+[VERBOSE] --- Scoring PrestaShop ---
+[VERBOSE]   Test 1 : recherche meta generator PrestaShop dans le HTML
+[VERBOSE]     ✗ pas de meta generator PrestaShop
+[VERBOSE]   Test 2 : https://caf.fr/classes/Configuration.php
+[VERBOSE]       ✓ Base trouvée : https://caf.fr (code 200, contenu significatif)
+[VERBOSE]   Base Joomla utilisée : https://caf.fr
+[VERBOSE]   Test 2 : recherche meta generator Joomla dans le HTML
+[VERBOSE]     ✗ pas de meta generator Joomla
+[VERBOSE]   Test 3 : https://caf.fr/administrator/manifests/files/joomla.xml
+[VERBOSE]     ✓ code 200, taille 13959
+[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point
+[VERBOSE]   Test 3 : https://caf.fr/config/defines.inc.php
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 4 : https://caf.fr/language/en-GB/en-GB.xml
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 5 : https://caf.fr/libraries/src/Version.php
+[VERBOSE]     ✓ code 200, taille 13959
+[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point
+[VERBOSE]   Test 4 : https://caf.fr/img/logo.jpg
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 5 : https://caf.fr/themes/default/img/logo.jpg
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 6 : vérification des headers
+[VERBOSE]     ✗ pas de X-Powered-By
+[VERBOSE]   Test 7 : fichiers JS typiques
+[VERBOSE]     Test : https://caf.fr/js/jquery/jquery-1.7.2.js
+[VERBOSE]     ✓ code 200, taille 13959
+[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point
+[VERBOSE]   Test 6 : https://caf.fr/administrator
+[VERBOSE]       ✗ code N/A
+[VERBOSE]     Test : https://caf.fr/js/jquery/jquery-1.7.2.min.js
+[VERBOSE]     ✓ code 200, taille 13959
+[VERBOSE]     ✗ ne contient pas Joomla
+[VERBOSE]   Test 7 : fichiers JS typiques Joomla
+[VERBOSE]     Test : https://caf.fr/media/system/js/core.js
+[VERBOSE]       ✗ code N/A
+[VERBOSE]     Test : https://caf.fr/js/jquery/jquery-1.11.0.min.js
+[VERBOSE]       ✗ code N/A
+[VERBOSE]   Test 8 : https://caf.fr/js/tools.js
+[VERBOSE]       ✗ code N/A
+[VERBOSE]     Test : https://caf.fr/media/system/js/mootools-core.js
+[VERBOSE]       ✗ code N/A
+[VERBOSE]   Test 8 : vérification des headers
+[VERBOSE]     ✗ pas de X-Content-Encoded-By
+[VERBOSE]     ✗ pas de X-Generator
+[VERBOSE] Score final Joomla : 1
+[VERBOSE] --- Scoring Magento ---
+[VERBOSE]   Test 1 : recherche meta generator Magento dans le HTML
+[VERBOSE]     ✗ pas de meta generator Magento
+[VERBOSE]   Test 2 : https://caf.fr/app/etc/local.xml
+[VERBOSE]     ✗ code N/A
+[VERBOSE] Score final PrestaShop : 2
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 3 : https://caf.fr/app/etc/env.php
+[VERBOSE]     ✓ code 200, taille 13959
+[VERBOSE]       ✗ fichier existe mais pas de contenu Magento → +1 point
+[VERBOSE]   Test 4 : https://caf.fr/js/varien/js.js
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 5 : https://caf.fr/pub/static/_requirejs/frontend/Magento/luma/en_US/js/require.js
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 6 : https://caf.fr/skin/frontend/default/default/css/styles.css
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 7 : https://caf.fr/pub/static/frontend/Magento/luma/en_US/css/styles-l.css
+[VERBOSE]     ✗ code N/A
+[VERBOSE]   Test 8 : vérification des headers Magento
+[VERBOSE]     ✗ pas de header X-Magento-*
+[VERBOSE]   Test 9 : https://caf.fr/Magento/Version
+[VERBOSE]     ✓ code 200, taille 13959
+[VERBOSE]       ✗ pas de version trouvée, mais fichier existe → +1 point
+[VERBOSE] Score final Magento : 2
+[VERBOSE] Aucun CMS reconnu détecté (score < seuil)
+  [93m[-][0m No CMS detected or supported

@@ -10,39 +10,32 @@ from lib.http import get, _cmseek_getsource
 from lib.paths import check_paths, DRUPAL_SENSITIVE_PATHS
 from lib.vuln import check_vulns_friendsofphp
 from modules.base import BaseModule, Vuln
-try:
-    from CMScan import VERBOSE
-except ImportError:
-    VERBOSE = False
-    
+
+import sys
+VERBOSE = getattr(sys.modules.get('__main__'), 'VERBOSE', False)
+
 class DrupalModule(BaseModule):
     def __init__(self, base_url, cms_info):
         super().__init__(base_url, cms_info)
+        self.verbose = VERBOSE  # variable globale importée
         self.OSV_BATCH = "https://api.osv.dev/v1/querybatch"
         self.OSV_QUERY = "https://api.osv.dev/v1/query"
         self.OSV_VULN  = "https://api.osv.dev/v1/vulns/{}"
-        # On force la redétection de la version (plus précise)
         detailed_version = self._extract_drupal_version()
         if detailed_version:
-            # Si la version fournie est moins précise (ex: "10" vs "10.5.12"), on la remplace
             if not self.version or len(self.version.split('.')) < len(detailed_version.split('.')):
                 if VERBOSE:
                     print(f"[VERBOSE] Drupal: version améliorée: {self.version} -> {detailed_version}")
                 self.version = detailed_version
                 self.result.version = self.version
+
     def scan(self):
-        # Avant tout, on force la redétection de la version la plus précise
         detailed_version = self._extract_drupal_version()
         if detailed_version:
-            # Si la version fournie est moins précise, on la remplace
             if not self.version or len(self.version.split('.')) < len(detailed_version.split('.')):
                 print(f"[DEBUG] Drupal: version améliorée: {self.version} -> {detailed_version}")
                 self.version = detailed_version
                 self.result.version = self.version
-                # On met aussi à jour la version dans cms_info pour le summary
-                import sys
-                # Remonter jusqu'au cms_info original via le module parent est compliqué
-                # On va juste stocker la version dans un attribut accessible
                 self.cms_info_version = detailed_version
 
         self._paths_scan()
@@ -64,7 +57,6 @@ class DrupalModule(BaseModule):
         self.result.paths = findings
 
     def _extract_drupal_version(self):
-        """Extrait la version Drupal avec toutes les méthodes disponibles."""
         base = self.base
         html = self.html
         candidates = []
@@ -72,24 +64,17 @@ class DrupalModule(BaseModule):
         if VERBOSE:
             print("[VERBOSE] Drupal: extraction de la version...")
 
-        # 1. CHANGELOG.txt (core et root) - PRIORITAIRE
+        # 1. CHANGELOG (collecte, pas de return)
         for p in ("/core/CHANGELOG.txt", "/CHANGELOG.txt"):
             cr = get(base + p)
             if cr and cr.status_code == 200:
-                # Chercher la version complète dans le CHANGELOG
                 m = re.search(r"Drupal (\d+\.\d+\.\d+)", cr.text)
                 if m:
                     candidates.append(m.group(1))
                     if VERBOSE:
                         print(f"[VERBOSE]   CHANGELOG: {m.group(1)}")
-                    # Si on trouve une version complète dans CHANGELOG, on la garde
-                    # et on ne va pas plus loin (c'est la source la plus fiable)
-                    if len(m.group(1).split('.')) >= 3:
-                        if VERBOSE:
-                            print(f"[VERBOSE]   Version complète trouvée dans CHANGELOG: {m.group(1)}")
-                        return m.group(1)
 
-        # 2. core/package.json
+        # 2. package.json
         pj = get(base + "/core/package.json")
         if pj and pj.status_code == 200:
             try:
@@ -102,21 +87,21 @@ class DrupalModule(BaseModule):
             except:
                 pass
 
-        # 3. drupalSettings JS object (page d'accueil)
+        # 3. drupalSettings
         m = re.search(r'drupalSettings\.data[^}]*"version"\s*:\s*"(\d+\.\d+\.\d+)"', html)
         if m:
             candidates.append(m.group(1))
             if VERBOSE:
                 print(f"[VERBOSE]   drupalSettings: {m.group(1)}")
 
-        # 4. URLs des assets (page d'accueil) avec ?v=X.Y.Z
+        # 4. assets (home)
         versions = re.findall(r"/core/[^\x22\x27]+[?&]v=(\d+\.\d+\.\d+)", html)
         if versions:
             candidates.extend(versions)
             if VERBOSE:
                 print(f"[VERBOSE]   assets (home): {', '.join(set(versions))}")
 
-        # 5. Meta generator (page d'accueil)
+        # 5. meta generator
         m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', html, re.I)
         if m and "." in m.group(1):
             candidates.append(m.group(1))
@@ -132,52 +117,53 @@ class DrupalModule(BaseModule):
                 if VERBOSE:
                     print(f"[VERBOSE]   X-Generator: {m.group(1).rstrip('.')}")
 
-        # 7. /core/install.php (si accessible)
-        install = get(base + "/core/install.php")
-        if install and install.status_code == 200:
-            install_html = install.text
-            # 7a. URLs des assets de install.php
-            inst_versions = re.findall(r"/core/[^\x22\x27]+[?&]v=(\d+\.\d+\.\d+)", install_html)
-            if inst_versions:
-                candidates.extend(inst_versions)
+        # 7. /core/install.php (TOUJOURS testé et logué)
+        if VERBOSE:
+            print("[VERBOSE]   /core/install.php: tentative...")
+        try:
+            install = get(base + "/core/install.php")
+            if install and install.status_code == 200:
+                install_html = install.text
                 if VERBOSE:
-                    print(f"[VERBOSE]   install.php assets: {', '.join(set(inst_versions))}")
-            # 7b. Meta generator de install.php
-            m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', install_html, re.I)
-            if m and "." in m.group(1):
-                candidates.append(m.group(1))
+                    print("[VERBOSE]   /core/install.php: accessible (200 OK)")
+                # URLs des assets
+                inst_versions = re.findall(r"/core/[^\x22\x27]+[?&]v=(\d+\.\d+\.\d+)", install_html)
+                if inst_versions:
+                    candidates.extend(inst_versions)
+                    if VERBOSE:
+                        print(f"[VERBOSE]   install.php assets: {', '.join(set(inst_versions))}")
+                # Meta generator
+                m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', install_html, re.I)
+                if m and "." in m.group(1):
+                    candidates.append(m.group(1))
+                    if VERBOSE:
+                        print(f"[VERBOSE]   install.php meta: {m.group(1)}")
+                # Texte "Drupal X.Y.Z"
+                m = re.search(r'Drupal\s+(\d+\.\d+\.\d+)', install_html, re.I)
+                if m:
+                    candidates.append(m.group(1))
+                    if VERBOSE:
+                        print(f"[VERBOSE]   install.php text: {m.group(1)}")
+                # Version majeure
+                m = re.search(r'Drupal\s+(\d+)', install_html, re.I)
+                if m:
+                    candidates.append(m.group(1) + ".0.0")
+                    if VERBOSE:
+                        print(f"[VERBOSE]   install.php major: {m.group(1)}.0.0")
+            else:
                 if VERBOSE:
-                    print(f"[VERBOSE]   install.php meta: {m.group(1)}")
-            # 7c. Texte : "Drupal X.Y.Z"
-            m = re.search(r'Drupal\s+(\d+\.\d+\.\d+)', install_html, re.I)
-            if m:
-                candidates.append(m.group(1))
-                if VERBOSE:
-                    print(f"[VERBOSE]   install.php text: {m.group(1)}")
-            # 7d. Version majeure uniquement
-            m = re.search(r'Drupal\s+(\d+)', install_html, re.I)
-            if m:
-                candidates.append(m.group(1) + ".0.0")
-                if VERBOSE:
-                    print(f"[VERBOSE]   install.php major: {m.group(1)}.0.0")
-            # 7e. Commentaire @version
-            m = re.search(r'@version\s+(\d+\.\d+\.\d+)', install_html, re.I)
-            if m:
-                candidates.append(m.group(1))
-                if VERBOSE:
-                    print(f"[VERBOSE]   install.php @version: {m.group(1)}")
-        else:
+                    print(f"[VERBOSE]   /core/install.php: code {install.status_code if install else 'N/A'}")
+        except Exception as e:
             if VERBOSE:
-                print(f"[VERBOSE]   install.php: inaccessible (code {install.status_code if install else 'N/A'})")
+                print(f"[VERBOSE]   /core/install.php: erreur {e}")
 
-        # Filtrer les versions vides
+        # Filtrer et choisir la meilleure version
         candidates = [v for v in candidates if v and re.search(r'\d', v)]
         if not candidates:
             if VERBOSE:
                 print("[VERBOSE]   Aucune version trouvée.")
             return None
 
-        # Trier par nombre de parties
         def version_parts(v):
             return len(v.split('.'))
 
@@ -185,6 +171,7 @@ class DrupalModule(BaseModule):
         if VERBOSE:
             print(f"[VERBOSE]   Meilleure version: {best} (parmi {len(candidates)} candidats)")
         return best
+
 
     def _core_scan(self):
         version = self.version
@@ -433,11 +420,18 @@ class DrupalModule(BaseModule):
             return (name, self._fetch_drupal_module_version(name, info["type"]))
         with ThreadPoolExecutor(max_workers=10) as ex:
             futs = {ex.submit(fetch_ver, item): item[0] for item in found.items() if item[1]["contrib"] == "contrib"}
-            for fut in as_completed(futs, timeout=15):
-                try:
-                    name, ver = fut.result(timeout=1)
-                    if ver: found[name]["version"] = ver
-                except: pass
+            try:
+                for fut in as_completed(futs, timeout=30):
+                    try:
+                        name, ver = fut.result(timeout=5)
+                        if ver:
+                            found[name]["version"] = ver
+                    except TimeoutError:
+                        continue
+                    except Exception:
+                        continue
+            except TimeoutError:
+                pass
         for v in found.values():
             v["paths"] = list(v["paths"])
         return found
