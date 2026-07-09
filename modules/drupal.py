@@ -57,21 +57,25 @@ class DrupalModule(BaseModule):
         self.result.paths = findings
 
     def _extract_drupal_version(self):
+        import sys
+        main = sys.modules.get('__main__')
+        verbose = getattr(main, 'VERBOSE', False) if main else False
+
         base = self.base
         html = self.html
         candidates = []
 
-        if VERBOSE:
+        if verbose:
             print("[VERBOSE] Drupal: extraction de la version...")
 
-        # 1. CHANGELOG (collecte, pas de return)
+        # 1. CHANGELOG
         for p in ("/core/CHANGELOG.txt", "/CHANGELOG.txt"):
             cr = get(base + p)
             if cr and cr.status_code == 200:
                 m = re.search(r"Drupal (\d+\.\d+\.\d+)", cr.text)
                 if m:
                     candidates.append(m.group(1))
-                    if VERBOSE:
+                    if verbose:
                         print(f"[VERBOSE]   CHANGELOG: {m.group(1)}")
 
         # 2. package.json
@@ -82,7 +86,7 @@ class DrupalModule(BaseModule):
                 v = pkg.get("version", "")
                 if re.match(r"\d+\.\d+\.\d+", v):
                     candidates.append(v)
-                    if VERBOSE:
+                    if verbose:
                         print(f"[VERBOSE]   package.json: {v}")
             except:
                 pass
@@ -91,21 +95,21 @@ class DrupalModule(BaseModule):
         m = re.search(r'drupalSettings\.data[^}]*"version"\s*:\s*"(\d+\.\d+\.\d+)"', html)
         if m:
             candidates.append(m.group(1))
-            if VERBOSE:
+            if verbose:
                 print(f"[VERBOSE]   drupalSettings: {m.group(1)}")
 
         # 4. assets (home)
         versions = re.findall(r"/core/[^\x22\x27]+[?&]v=(\d+\.\d+\.\d+)", html)
         if versions:
             candidates.extend(versions)
-            if VERBOSE:
+            if verbose:
                 print(f"[VERBOSE]   assets (home): {', '.join(set(versions))}")
 
-        # 5. meta generator
+        # 5. meta generator (page d'accueil)
         m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', html, re.I)
         if m and "." in m.group(1):
             candidates.append(m.group(1))
-            if VERBOSE:
+            if verbose:
                 print(f"[VERBOSE]   meta generator: {m.group(1)}")
 
         # 6. X-Generator header
@@ -114,55 +118,90 @@ class DrupalModule(BaseModule):
             m = re.search(r"Drupal (\d+\.?[\d.]*)", gen, re.I)
             if m:
                 candidates.append(m.group(1).rstrip("."))
-                if VERBOSE:
+                if verbose:
                     print(f"[VERBOSE]   X-Generator: {m.group(1).rstrip('.')}")
 
-        # 7. /core/install.php (TOUJOURS testé et logué)
-        if VERBOSE:
+        # 7. /core/install.php (avec comptage de fréquence)
+        if verbose:
             print("[VERBOSE]   /core/install.php: tentative...")
-        try:
-            install = get(base + "/core/install.php")
-            if install and install.status_code == 200:
-                install_html = install.text
-                if VERBOSE:
-                    print("[VERBOSE]   /core/install.php: accessible (200 OK)")
-                # URLs des assets
-                inst_versions = re.findall(r"/core/[^\x22\x27]+[?&]v=(\d+\.\d+\.\d+)", install_html)
-                if inst_versions:
-                    candidates.extend(inst_versions)
-                    if VERBOSE:
-                        print(f"[VERBOSE]   install.php assets: {', '.join(set(inst_versions))}")
-                # Meta generator
-                m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', install_html, re.I)
-                if m and "." in m.group(1):
-                    candidates.append(m.group(1))
-                    if VERBOSE:
-                        print(f"[VERBOSE]   install.php meta: {m.group(1)}")
-                # Texte "Drupal X.Y.Z"
-                m = re.search(r'Drupal\s+(\d+\.\d+\.\d+)', install_html, re.I)
+        install = get(base + "/core/install.php")
+        if install and install.status_code == 200:
+            install_html = install.text
+            if verbose:
+                print("[VERBOSE]   /core/install.php: accessible (200 OK)")
+            # Compteur de versions dans les assets de install.php
+            install_versions = {}
+            for src in re.findall(r'<script[^>]*src="([^"]+)"', install_html):
+                m = re.search(r'[?&]v=([\d.]+)', src)
                 if m:
-                    candidates.append(m.group(1))
-                    if VERBOSE:
-                        print(f"[VERBOSE]   install.php text: {m.group(1)}")
-                # Version majeure
-                m = re.search(r'Drupal\s+(\d+)', install_html, re.I)
-                if m:
-                    candidates.append(m.group(1) + ".0.0")
-                    if VERBOSE:
-                        print(f"[VERBOSE]   install.php major: {m.group(1)}.0.0")
-            else:
-                if VERBOSE:
-                    print(f"[VERBOSE]   /core/install.php: code {install.status_code if install else 'N/A'}")
-        except Exception as e:
-            if VERBOSE:
-                print(f"[VERBOSE]   /core/install.php: erreur {e}")
+                    ver = m.group(1)
+                    # Ne compter que les assets du core Drupal, pas les vendors
+                    if '/core/' in src and '/vendor/' not in src:
+                        install_versions[ver] = install_versions.get(ver, 0) + 1
+            if install_versions:
+                best_install = max(install_versions, key=install_versions.get)
+                candidates.append(best_install)
+                if verbose:
+                    print(f"[VERBOSE]   install.php version la plus fréquente: {best_install} ({install_versions[best_install]} occurrences)")
+            # (on garde aussi les autres méthodes: meta, text, etc.)
+            inst_versions = re.findall(r"/core/[^\x22\x27]+[?&]v=(\d+\.\d+\.\d+)", install_html)
+            if inst_versions:
+                candidates.extend(inst_versions)
+                if verbose:
+                    print(f"[VERBOSE]   install.php assets: {', '.join(set(inst_versions))}")
+            # Meta generator de install.php
+            m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', install_html, re.I)
+            if m and "." in m.group(1):
+                candidates.append(m.group(1))
+                if verbose:
+                    print(f"[VERBOSE]   install.php meta: {m.group(1)}")
+            # Texte "Drupal X.Y.Z"
+            m = re.search(r'Drupal\s+(\d+\.\d+\.\d+)', install_html, re.I)
+            if m:
+                candidates.append(m.group(1))
+                if verbose:
+                    print(f"[VERBOSE]   install.php text: {m.group(1)}")
+            # Version majeure
+            m = re.search(r'Drupal\s+(\d+)', install_html, re.I)
+            if m:
+                candidates.append(m.group(1) + ".0.0")
+                if verbose:
+                    print(f"[VERBOSE]   install.php major: {m.group(1)}.0.0")
+        else:
+            if verbose:
+                print(f"[VERBOSE]   /core/install.php: code {install.status_code if install else 'N/A'}")
 
-        # Filtrer et choisir la meilleure version
+        # Filtrer les versions vides
         candidates = [v for v in candidates if v and re.search(r'\d', v)]
         if not candidates:
-            if VERBOSE:
+            if verbose:
                 print("[VERBOSE]   Aucune version trouvée.")
             return None
+
+        # NOUVEAU : compter les fréquences et prendre la plus fréquente
+        from collections import Counter
+        freq = Counter(candidates)
+        # Si une version apparaît plus d'une fois ou qu'elle est la seule, on la prend
+        if len(freq) == 1:
+            best = next(iter(freq))
+        else:
+            # Prendre celle avec le plus grand nombre d'occurrences
+            best = max(freq, key=freq.get)
+        if verbose:
+            print(f"[VERBOSE]   Version la plus fréquente: {best} ({freq[best]} occurrences parmi {len(candidates)} candidats)")
+
+        # Si la version la plus fréquente est < 7 (ex: 4.0.0), on essaie de trouver une majeure >= 7
+        if best.startswith(('0.', '1.', '2.', '3.', '4.', '5.', '6.')):
+            # Filtrer les versions avec majeure >= 7
+            drupal_versions = [v for v in candidates if v.startswith(('7.', '8.', '9.', '10.', '11.'))]
+            if drupal_versions:
+                # Prendre la plus fréquente parmi celles-ci
+                drupal_freq = Counter(drupal_versions)
+                best = max(drupal_freq, key=drupal_freq.get)
+                if verbose:
+                    print(f"[VERBOSE]   Version Drupal la plus fréquente: {best} ({drupal_freq[best]} occurrences)")
+
+        return best
 
         def version_parts(v):
             return len(v.split('.'))

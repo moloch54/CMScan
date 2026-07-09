@@ -310,7 +310,8 @@ def detect_drupal_score(base, home_html=None, home_headers=None):
     if home_html:
         if VERBOSE:
             print("[VERBOSE]   Test 1 : recherche meta generator Drupal dans le HTML")
-        m = re.search(r'<meta name="Generator" content="Drupal ([\d.]+)"', home_html, re.I)
+
+        m = re.search(r'<meta name="Generator" content="Drupal\s+([\d.]+)', home_html, re.I)
         if m:
             version = m.group(1)
             score += 3
