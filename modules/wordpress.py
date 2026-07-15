@@ -23,6 +23,8 @@ class WordPressModule(BaseModule):
         self.THEMES_DIR = "vulnDatabase/themesVuln"
         self.TEMPLATES_DIR = "vulnDatabase/templates"
         self.SPIDERS_DIR = "vulnDatabase/spiders"
+        self._plugin_versions_from_meta = {}
+        self._plugin_versions_from_comment = {}
 
     def scan(self):
  
@@ -66,12 +68,26 @@ class WordPressModule(BaseModule):
         if VERBOSE:
             print("[VERBOSE] Core version: fallback WPScan method...")
         
+        # ═══ NOUVEAU : Feed RSS (comme WPScan) ═══
+        if VERBOSE:
+            print("[VERBOSE]   Trying feed RSS...")
+        try:
+            r = get(self.base + "/feed", timeout=5)
+            if r and r.status_code == 200:
+                m = re.search(r'<generator>https://wordpress.org/\?v=([\d\.]+)</generator>', r.text, re.I)
+                if m:
+                    version = m.group(1)
+                    if VERBOSE:
+                        print(f"[VERBOSE] Core version from feed RSS: {version}")
+                    return version
+        except:
+            pass
+
         # 1. Télécharger /wp-admin/install.php
         url = self.base + "/wp-admin/install.php"
         try:
             r = get(url, timeout=5)
             if r and r.status_code == 200:
-                # Cherche les ver= dans les URLs des assets (comme WPScan)
                 pattern = r'(?:href|src)=["\'][^"\']*?ver=([\d.]+)["\']'
                 matches = re.findall(pattern, r.text, re.I)
                 if matches:
@@ -81,7 +97,6 @@ class WordPressModule(BaseModule):
                         if VERBOSE:
                             print(f"[VERBOSE] Core version from install.php: {version}")
                         return version
-                # Cherche aussi "WordPress X.X" dans le texte
                 m = re.search(r'WordPress\s+([\d.]+)', r.text, re.I)
                 if m:
                     version = m.group(1)
@@ -104,7 +119,6 @@ class WordPressModule(BaseModule):
             try:
                 r = get(url, timeout=5)
                 if r and r.status_code == 200:
-                    # Cherche ?ver= dans le contenu ou dans les URLs
                     m = re.search(r'ver=([\d.]+)', r.text, re.I)
                     if m:
                         version = m.group(1)
@@ -112,7 +126,6 @@ class WordPressModule(BaseModule):
                             if VERBOSE:
                                 print(f"[VERBOSE] Core version from {css_path}: {version}")
                             return version
-                    # Cherche aussi dans le texte
                     m = re.search(r'WordPress\s+([\d.]+)', r.text, re.I)
                     if m:
                         version = m.group(1)
@@ -136,6 +149,8 @@ class WordPressModule(BaseModule):
         section("WordPress Core")
         if core_version:
             ok(f"Version: {C.BOLD}{core_version}{C.RST}")
+            self.result.version = core_version  # <--- AJOUT
+
             path = self._ensure_wp_vuln(core_version, "core")
             vulns = self._wp_vuln_from_file(path, core_version)
             for v in vulns:
@@ -172,6 +187,30 @@ class WordPressModule(BaseModule):
     def _plugins_scan(self):
         html = self.html
         plugin_slugs = self._wp_slugs_from_html(html, "plugin")
+        
+        # ═══ Détection passive des plugins depuis le HTML ═══
+        # Meta tags (ex: google-site-kit)
+        meta_matches = re.findall(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+        for meta in meta_matches:
+            # Ex: "Site Kit by Google 1.183.0"
+            m = re.search(r'Site Kit by Google\s+([\d.]+)', meta, re.I)
+            if m:
+                if 'google-site-kit' not in plugin_slugs:
+                    plugin_slugs.append('google-site-kit')
+                self._plugin_versions_from_meta['google-site-kit'] = m.group(1)
+                if VERBOSE:
+                    print(f"[VERBOSE] Plugin detected from meta: google-site-kit {m.group(1)}")
+        
+        # Commentaires (ex: wordpress-seo)
+        comment_matches = re.findall(r'<!--[^>]*optimized with the Yoast SEO plugin v([\d.]+)[^>]*-->', html, re.I)
+        if comment_matches:
+            version = comment_matches[0]
+            if 'wordpress-seo' not in plugin_slugs:
+                plugin_slugs.append('wordpress-seo')
+            self._plugin_versions_from_comment['wordpress-seo'] = version
+            if VERBOSE:
+                print(f"[VERBOSE] Plugin detected from comment: wordpress-seo {version}")
+        
         templates = self._load_templates()
         for tpl in templates:
             regex = tpl[0].rstrip("\n")
@@ -200,9 +239,15 @@ class WordPressModule(BaseModule):
         
         # D'abord, on récupère les versions depuis le HTML (rapide)
         for slug in plugin_slugs:
-            ver = self._wp_ver_from_html(html, slug, "plugin", self.version)
-            if ver:
-                plugin_versions[slug] = ver
+            # Vérifier si on a une version depuis meta ou commentaire
+            if slug in self._plugin_versions_from_meta:
+                plugin_versions[slug] = self._plugin_versions_from_meta[slug]
+            elif slug in self._plugin_versions_from_comment:
+                plugin_versions[slug] = self._plugin_versions_from_comment[slug]
+            else:
+                ver = self._wp_ver_from_html(html, slug, "plugin", self.version)
+                if ver:
+                    plugin_versions[slug] = ver
         
         # Ensuite, pour ceux qui n'ont pas de version, on fetch les readme.txt avec max 2 workers
         slugs_to_fetch = [slug for slug in plugin_slugs if slug not in plugin_versions or not plugin_versions[slug]]

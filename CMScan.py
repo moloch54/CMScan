@@ -398,18 +398,21 @@ def _extract_wp_version(base):
                 if VERBOSE:
                     print(f"[VERBOSE] Version WP via version.php: {version}")
 
-    # 7. NOUVEAU : depuis les assets avec ?ver= (méthode WPScan)
+    # 7. NOUVEAU : depuis les assets avec ?ver= (uniquement ceux du core)
     if not version and html:
-        pattern = r'(?:href|src)=["\'][^"\']*?ver=([\d.]+)["\']'
+        # On cherche les assets dans les dossiers core
+        pattern = r'(?:href|src)=["\'](?:[^"\']*/(wp-includes|wp-admin)/[^"\']*)\?ver=([\d.]+)["\']'
         matches = re.findall(pattern, html, re.I)
         if matches:
             from collections import Counter
-            v = Counter(matches).most_common(1)[0][0]
-            if re.match(r'\d+\.\d+(\.\d+)?', v):
-                version = v
-                if VERBOSE:
-                    print(f"[VERBOSE] Version WP via assets (ver=): {version}")
-
+            # On prend la version la plus fréquente parmi les assets core
+            versions = [v for _, v in matches]
+            if versions:
+                v = Counter(versions).most_common(1)[0][0]
+                if re.match(r'\d+\.\d+(\.\d+)?', v):
+                    version = v
+                    if VERBOSE:
+                        print(f"[VERBOSE] Version WP via assets core (ver=): {version}")
     return version
 
 # ──────────────────────────────────────────────────────────────
@@ -1644,18 +1647,20 @@ def detect_wordpress_score(base, home_html=None, home_headers=None):
             if VERBOSE:
                 print(f"[VERBOSE]   Version extraite depuis meta generator: {version} → +2 points")
         else:
-            # 2. Fallback assets (ver=)
-            pattern = r'(?:href|src)=["\'][^"\']*?ver=([\d.]+)["\']'
+            # 2. Fallback assets (ver=) : uniquement ceux du core
+            pattern = r'(?:href|src)=["\'](?:[^"\']*/(wp-includes|wp-admin)/[^"\']*)\?ver=([\d.]+)["\']'
             matches = re.findall(pattern, home_html, re.I)
             if matches:
                 from collections import Counter
-                v = Counter(matches).most_common(1)[0][0]
-                if re.match(r'\d+\.\d+(\.\d+)?', v):
-                    version = v
-                    sources.append(f"assets ver: {version}")
-                    score += 2
-                    if VERBOSE:
-                        print(f"[VERBOSE]   Version extraite depuis assets: {version} → +2 points")
+                versions = [v for _, v in matches]
+                if versions:
+                    v = Counter(versions).most_common(1)[0][0]
+                    if re.match(r'\d+\.\d+(\.\d+)?', v):
+                        version = v
+                        sources.append(f"assets core ver: {version}")
+                        score += 2
+                        if VERBOSE:
+                            print(f"[VERBOSE]   Version extraite depuis assets core: {version} → +2 points")
 
     # ===== TEST 1 : /wp-login.php =====
     url = base + "/wp-login.php"
