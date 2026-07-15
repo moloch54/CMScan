@@ -20,7 +20,7 @@ USER_AGENTS = [
 
 def get(url, **kw):
     global FIXED_UA
-    timeout = kw.get("timeout", 6)
+    timeout = kw.get("timeout", 15)
     allow_redirects = kw.get("allow_redirects", True)
     headers = kw.get("headers", {})
     if FIXED_UA:

@@ -31,8 +31,6 @@ from lib.colors import info, ok, warn   # adapte si tu n'as pas ce module
 WP_LAST_UPDATE_FILE = "last_update_vulnbase.txt"
 
 
-WP_LAST_UPDATE_FILE = "last_update_vulnbase.txt"
-
 def is_home_redirect(content, home_html):
     """
     Détecte si le contenu est celui de la page d'accueil (redirection ou rewriting).
@@ -201,18 +199,105 @@ BANNER = f"""
 # ──────────────────────────────────────────────────────────────
 # 1. RÉCUPÉRATION DU HTML (fallback Playwright)
 # ──────────────────────────────────────────────────────────────
-def get_html(base):
-    # 1. Essayer avec get() (requests)
-    r = get(base)
-    if r and r.status_code == 200:
-        html = r.text
-        headers = r.headers
-        if 'sgcaptcha' not in html and 'challenge' not in html:
-            return html, headers
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
+    # ... ajoute d'autres si besoin
+]
 
-    # 2. Fallback avec _cmseek_getsource (urllib.request, pas Playwright)
+# ──────────────────────────────────────────────────────────────
+# 1. RÉCUPÉRATION DU HTML (avec fallback et verbose)
+# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+# 1. RÉCUPÉRATION DU HTML (avec fallback, retry, SSL, verbose)
+# ──────────────────────────────────────────────────────────────
+def get_html(base, max_retries=3, timeout=8):
+    """
+    Récupère le HTML de l'URL avec :
+      - timeout 8s
+      - User-Agent aléatoire
+      - retry si code != 200 ou page < 100 caractères
+      - gestion SSL (WRONG_VERSION_NUMBER → HTTP)
+      - fallback _cmseek_getsource
+    """
+    if VERBOSE:
+        print(f"[VERBOSE] get_html() appelée pour {base}")
+        print(f"[VERBOSE]   timeout={timeout}s, max_retries={max_retries}")
+
+    original_base = base
+    parsed = urlparse(base)
+    current_scheme = parsed.scheme if parsed.scheme in ('https','http') else 'https'
+    candidates = []
+    if current_scheme == 'https':
+        candidates.append(base)
+        candidates.append(base.replace('https://', 'http://'))
+    else:
+        candidates.append(base)
+        candidates.append(base.replace('http://', 'https://'))
+
+    for url_to_try in candidates:
+        for attempt in range(1, max_retries + 1):
+            ua = random.choice(USER_AGENTS)
+            headers = {'User-Agent': ua}
+            if VERBOSE:
+                print(f"[VERBOSE]   Tentative {attempt}/{max_retries} avec {url_to_try} (UA: {ua[:60]}...)")
+
+            try:
+                r = requests.get(url_to_try, headers=headers, timeout=timeout,
+                                 allow_redirects=True, verify=False)
+                status = r.status_code
+                content_len = len(r.text)
+
+                if VERBOSE:
+                    print(f"[VERBOSE]     → Code HTTP : {status}")
+                    print(f"[VERBOSE]     → Longueur : {content_len} caractères")
+                    snippet = r.text[:200].replace('\n', ' ').replace('\r', '').strip()
+                    print(f"[VERBOSE]     → Extrait : {snippet[:200]}...")
+
+                if status == 200:
+                    if content_len < 100:
+                        if VERBOSE:
+                            print(f"[VERBOSE]     ❌ Page trop courte (<100), on réessaie.")
+                        continue
+                    # ─── SUPPRESSION DES FILTRES CAPTCHA ───
+                    # On accepte la page, même si elle contient "challenge" ou "sgcaptcha"
+                    if VERBOSE:
+                        print("[VERBOSE]     ✅ Succès !")
+                    return r.text, dict(r.headers)
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ❌ Code HTTP {status} (non 200), on réessaie.")
+                    continue
+
+            except requests.exceptions.SSLError as e:
+                if "WRONG_VERSION_NUMBER" in str(e):
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ⚠️  SSL error, on passe au candidat suivant.")
+                    break
+                else:
+                    if VERBOSE:
+                        print(f"[VERBOSE]     ❌ SSL error : {e}")
+            except Exception as e:
+                if VERBOSE:
+                    print(f"[VERBOSE]     ❌ Exception : {type(e).__name__} - {e}")
+
+            if attempt < max_retries:
+                sleep_time = 2 ** attempt
+                if VERBOSE:
+                    print(f"[VERBOSE]   Attente de {sleep_time}s avant la prochaine tentative...")
+                time.sleep(sleep_time)
+
+        if VERBOSE:
+            print(f"[VERBOSE]   Échec avec {url_to_try}, passage au candidat suivant")
+
+    # ── Fallback ──
+    if VERBOSE:
+        print("[VERBOSE] ⚠️  Toutes les tentatives requests ont échoué, passage au fallback _cmseek_getsource")
+
     ua = random.choice(USER_AGENTS)
-    src = _cmseek_getsource(base, ua)
+    src = _cmseek_getsource(original_base, ua)
+
     if src[0] == '1':
         html = src[1]
         headers = {}
@@ -220,24 +305,44 @@ def get_html(base):
             if ': ' in line:
                 k, v = line.split(': ', 1)
                 headers[k.lower()] = v
-        return html, headers
 
+        if VERBOSE:
+            print(f"[VERBOSE]   Fallback retourne {len(html)} caractères")
+            snippet = html[:200].replace('\n', ' ').replace('\r', '').strip()
+            print(f"[VERBOSE]   Extrait fallback : {snippet[:200]}...")
+
+        # Ici aussi on ne filtre plus que sur la longueur
+        if len(html) >= 100:
+            if VERBOSE:
+                print("[VERBOSE]   ✅ Fallback réussi.")
+            return html, headers
+        else:
+            if VERBOSE:
+                print("[VERBOSE]   ❌ Fallback : page trop courte.")
+    else:
+        if VERBOSE:
+            print(f"[VERBOSE]   ❌ Fallback échoué : code {src[0]}")
+
+    if VERBOSE:
+        print("[VERBOSE] ❌ ÉCHEC TOTAL : aucun HTML valide récupéré.")
     return None, None
-
+    
 # ──────────────────────────────────────────────────────────────
 # 2. EXTRACTION VERSION WORDPRESS (comme WPscrap)
 # ──────────────────────────────────────────────────────────────
+
 def _extract_wp_version(base):
     """Extrait la version WordPress avec toutes les méthodes possibles."""
     version = None
 
-    # 1. Meta generator (page d'accueil)
-    r_home = get(base)
-    if r_home and r_home.status_code == 200:
-        m = re.search(r'<meta name="generator" content="WordPress ([\d.]+)"', r_home.text, re.I)
+    # 1. Meta generator (page d'accueil) - on utilise get_html
+    html, headers = get_html(base, max_retries=2, timeout=8)
+    if html:
+        m = re.search(r'<meta name="generator" content="WordPress ([\d.]+)"', html, re.I)
         if m:
             version = m.group(1)
-            print(f"[DEBUG] Version WP via meta: {version}")
+            if VERBOSE:
+                print(f"[VERBOSE] Version WP via meta: {version}")
 
     # 2. /wp-admin/ (assets avec ver=)
     if not version:
@@ -248,7 +353,8 @@ def _extract_wp_version(base):
                 version = m.group(2)
                 if "Download" in version or ".com" in version:
                     version = None
-                print(f"[DEBUG] Version WP via wp-admin: {version}")
+                if VERBOSE:
+                    print(f"[VERBOSE] Version WP via wp-admin: {version}")
 
     # 3. /readme.html
     if not version:
@@ -259,7 +365,8 @@ def _extract_wp_version(base):
                 m = re.search(r'Version (\d+\.\d+[\.\d]*)', r_readme.text)
             if m:
                 version = m.group(1)
-                print(f"[DEBUG] Version WP via readme: {version}")
+                if VERBOSE:
+                    print(f"[VERBOSE] Version WP via readme: {version}")
 
     # 4. /wp-links-opml.php
     if not version:
@@ -268,7 +375,8 @@ def _extract_wp_version(base):
             m = re.search(r'generator="WordPress/(\d+\.\d+[\.\d]*)"', r_opml.text)
             if m:
                 version = m.group(1)
-                print(f"[DEBUG] Version WP via opml: {version}")
+                if VERBOSE:
+                    print(f"[VERBOSE] Version WP via opml: {version}")
 
     # 5. /feed (RSS)
     if not version:
@@ -277,7 +385,8 @@ def _extract_wp_version(base):
             m = re.search(r'<generator>https://wordpress.org/\?v=([\d\.]+)</generator>', r_feed.text)
             if m:
                 version = m.group(1)
-                print(f"[DEBUG] Version WP via feed: {version}")
+                if VERBOSE:
+                    print(f"[VERBOSE] Version WP via feed: {version}")
 
     # 6. /wp-includes/version.php
     if not version:
@@ -286,7 +395,20 @@ def _extract_wp_version(base):
             m = re.search(r"\$wp_version\s*=\s*'([\d\.]+)'", r_ver.text)
             if m:
                 version = m.group(1)
-                print(f"[DEBUG] Version WP via version.php: {version}")
+                if VERBOSE:
+                    print(f"[VERBOSE] Version WP via version.php: {version}")
+
+    # 7. NOUVEAU : depuis les assets avec ?ver= (méthode WPScan)
+    if not version and html:
+        pattern = r'(?:href|src)=["\'][^"\']*?ver=([\d.]+)["\']'
+        matches = re.findall(pattern, html, re.I)
+        if matches:
+            from collections import Counter
+            v = Counter(matches).most_common(1)[0][0]
+            if re.match(r'\d+\.\d+(\.\d+)?', v):
+                version = v
+                if VERBOSE:
+                    print(f"[VERBOSE] Version WP via assets (ver=): {version}")
 
     return version
 
@@ -1852,56 +1974,314 @@ def detect_shopify_score(base, home_html=None, home_headers=None, verbose=False)
         'version': version,
         'source': ' ; '.join(sources) if sources else 'aucun test positif'
     }
+
+def detect_typo3_score(base, home_html=None, home_headers=None):
+    score = 0
+    version = None
+    sources = []
+
+    if VERBOSE:
+        print("[VERBOSE] --- Scoring TYPO3 ---")
+
+    # 1. Meta generator
+    if home_html:
+        m = re.search(r'<meta name="generator" content="TYPO3 CMS(?:[\s]+([\d.]+))?"', home_html, re.I)
+        if m:
+            if m.group(1):
+                version = m.group(1)
+                score += 2
+                sources.append(f"meta generator TYPO3 (version {version})")
+            else:
+                score += 2
+                sources.append("meta generator TYPO3 (pas de version)")
+            if VERBOSE:
+                print(f"[VERBOSE]   ✓ meta generator TYPO3 → +2 points" + (f" (version {version})" if version else ""))
+
+    # 2. Chemins typiques /typo3conf/ext/
+    if home_html:
+        count_ext = len(re.findall(r'/typo3conf/ext/[^/]+/', home_html, re.I))
+        if count_ext > 0:
+            points = min(count_ext, 3)  # max 3 points
+            score += points
+            sources.append(f"{count_ext} occurrences de /typo3conf/ext/ (+{points} points)")
+            if VERBOSE:
+                print(f"[VERBOSE]   ✓ {count_ext} occurrences de /typo3conf/ext/ → +{points} points")
+
+    # 3. Chemins /typo3temp/assets/compressed/
+    if home_html:
+        count_temp = len(re.findall(r'/typo3temp/assets/compressed/', home_html, re.I))
+        if count_temp > 0:
+            score += 1
+            sources.append(f"{count_temp} occurrences de /typo3temp/assets/compressed/ (+1 point)")
+            if VERBOSE:
+                print(f"[VERBOSE]   ✓ {count_temp} occurrences de /typo3temp/assets/compressed/ → +1 point")
+
+    # 4. Commentaires TYPO3SEARCH
+    if home_html:
+        if re.search(r'<!--TYPO3SEARCH_begin-->', home_html, re.I):
+            score += 1
+            sources.append("commentaire TYPO3SEARCH_begin/end (+1 point)")
+            if VERBOSE:
+                print("[VERBOSE]   ✓ commentaires TYPO3SEARCH → +1 point")
+
+    # 5. Headers X-TYPO3-*
+    if home_headers:
+        found_typo3_header = False
+        for h in home_headers:
+            if h.lower().startswith('x-typo3-'):
+                score += 1
+                sources.append(f"header {h} (+1 point)")
+                found_typo3_header = True
+                if VERBOSE:
+                    print(f"[VERBOSE]   ✓ header {h} présent → +1 point")
+                break
+        if not found_typo3_header and VERBOSE:
+            print("[VERBOSE]   ✗ pas de header X-TYPO3-*")
+
+    # 6. Classes CSS spécifiques (ex: bloc--, js-animation--, tns-)
+    if home_html:
+        typo3_classes = ['bloc--services', 'js-animation--scroll', 'tns-controls']
+        found = [c for c in typo3_classes if c in home_html.lower()]
+        if len(found) >= 2:
+            score += 1
+            sources.append(f"classes TYPO3: {', '.join(found)} (+1 point)")
+            if VERBOSE:
+                print(f"[VERBOSE]   ✓ classes TYPO3 trouvées ({', '.join(found)}) → +1 point")
+
+    # Bonus version
+    if version:
+        score += 1
+        sources.append("version connue (bonus)")
+        if VERBOSE:
+            print("[VERBOSE]   Bonus +1 point pour version connue")
+
+    source = " ; ".join(sources) if sources else "aucun test positif"
+    if VERBOSE:
+        print(f"[VERBOSE] Score final TYPO3 : {score}")
+
+    return {'score': score, 'version': version, 'source': source}
+
+
+def detect_opencart_score(base, home_html=None, home_headers=None):
+    """
+    Score de détection OpenCart avec logs des requêtes HTTP via lib.http.get().
+    """
+    score = 0
+    version = None
+    sources = []
+
+    if VERBOSE:
+        print("[VERBOSE] --- Scoring OpenCart ---")
+
+    if not home_html:
+        if VERBOSE:
+            print("[VERBOSE]   Pas de HTML fourni")
+        return {'score': 0, 'version': None, 'source': 'pas de HTML'}
+
+    html = home_html.lower()
+
+    # 1. Meta generator
+    m = re.search(r'<meta name="generator" content="OpenCart(?:[\s]+([\d.]+))?"', home_html, re.I)
+    if m:
+        if m.group(1):
+            version = m.group(1)
+            score += 2
+            sources.append(f"meta generator (version {version})")
+            if VERBOSE:
+                print(f"[VERBOSE]   ✓ meta generator → +2 (version {version})")
+        else:
+            score += 2
+            sources.append("meta generator (pas de version)")
+            if VERBOSE:
+                print("[VERBOSE]   ✓ meta generator → +2")
+
+    # 2. Chemins /catalog/ ou /image/
+    if '/catalog/view/' in html or '/image/' in html:
+        score += 2
+        sources.append("/catalog/ ou /image/")
+        if VERBOSE:
+            print("[VERBOSE]   ✓ /catalog/ ou /image/ → +2")
+
+    # 3. Routes OpenCart
+    if 'route=common/home' in html or 'route=product/category' in html or 'route=product/product' in html:
+        score += 2
+        sources.append("routes OpenCart")
+        if VERBOSE:
+            print("[VERBOSE]   ✓ routes OpenCart → +2")
+
+    # 4. Classes CSS typiques
+    opencart_classes = ['product-layout', 'product-grid', 'product-list', 'btn-cart', 'cart-total']
+    found = [c for c in opencart_classes if c in html]
+    if len(found) >= 2:
+        score += 2
+        sources.append(f"classes: {', '.join(found)}")
+        if VERBOSE:
+            print(f"[VERBOSE]   ✓ classes OpenCart → +2")
+    elif len(found) == 1:
+        score += 1
+        sources.append(f"classe: {found[0]}")
+        if VERBOSE:
+            print(f"[VERBOSE]   ✓ classe OpenCart → +1")
+
+    # 5. Footer "Powered by OpenCart"
+    if 'powered by opencart' in html or 'opencart' in html:
+        score += 2
+        sources.append("Powered by OpenCart")
+        if VERBOSE:
+            print("[VERBOSE]   ✓ 'Powered by OpenCart' → +2")
+
+    # 6. Requêtes HTTP avec lib.http.get (logs intégrés)
+    # 6.1 /admin/index.php
+    url_admin = base + "/admin/index.php"
+    if VERBOSE:
+        print(f"[VERBOSE]   HTTP GET: {url_admin}")
+    r_admin = get(url_admin)
+    if r_admin:
+        if VERBOSE:
+            print(f"[VERBOSE]     → {r_admin.status_code}")
+        if r_admin.status_code == 200 and ("OpenCart" in r_admin.text or "Administration" in r_admin.text):
+            score += 2
+            sources.append("/admin/index.php (200, contient OpenCart)")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ +2 (contient OpenCart)")
+        elif r_admin.status_code == 200:
+            score += 1
+            sources.append("/admin/index.php (200, sans signature)")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ +1 (200)")
+        elif r_admin.status_code == 403:
+            score += 1
+            sources.append("/admin/index.php (403)")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ +1 (403)")
+    elif VERBOSE:
+        print("[VERBOSE]     ✗ requête échouée (None)")
+
+    # 6.2 /system/startup.php
+    url_startup = base + "/system/startup.php"
+    if VERBOSE:
+        print(f"[VERBOSE]   HTTP GET: {url_startup}")
+    r_startup = get(url_startup)
+    if r_startup:
+        if VERBOSE:
+            print(f"[VERBOSE]     → {r_startup.status_code}")
+        if r_startup.status_code == 200:
+            m = re.search(r"define\s*\(\s*'VERSION'\s*,\s*'([\d.]+)'\s*\)", r_startup.text)
+            if m:
+                version = m.group(1)
+                score += 2
+                sources.append(f"/system/startup.php (version {version})")
+                if VERBOSE:
+                    print(f"[VERBOSE]     ✓ +2 (version {version})")
+            else:
+                score += 1
+                sources.append("/system/startup.php (200)")
+                if VERBOSE:
+                    print("[VERBOSE]     ✓ +1 (200)")
+    elif VERBOSE:
+        print("[VERBOSE]     ✗ requête échouée (None)")
+
+    # 6.3 /install/
+    url_install = base + "/install/"
+    if VERBOSE:
+        print(f"[VERBOSE]   HTTP GET: {url_install}")
+    r_install = get(url_install)
+    if r_install:
+        if VERBOSE:
+            print(f"[VERBOSE]     → {r_install.status_code}")
+        if r_install.status_code == 200:
+            score += 1
+            sources.append("/install/ accessible")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ +1")
+    elif VERBOSE:
+        print("[VERBOSE]     ✗ requête échouée (None)")
+
+    # 6.4 /config.php
+    url_config = base + "/config.php"
+    if VERBOSE:
+        print(f"[VERBOSE]   HTTP GET: {url_config}")
+    r_config = get(url_config)
+    if r_config:
+        if VERBOSE:
+            print(f"[VERBOSE]     → {r_config.status_code}")
+        if r_config.status_code == 200:
+            score += 2
+            sources.append("/config.php (200)")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ +2")
+        elif r_config.status_code == 403:
+            score += 1
+            sources.append("/config.php (403)")
+            if VERBOSE:
+                print("[VERBOSE]     ✓ +1")
+    elif VERBOSE:
+        print("[VERBOSE]     ✗ requête échouée (None)")
+
+    # 7. Détection de version depuis les assets
+    versions = re.findall(r'[?&]v=([\d.]+)', home_html)
+    if versions:
+        from collections import Counter
+        v = Counter(versions).most_common(1)[0][0]
+        if re.match(r'\d+\.\d+\.\d+', v):
+            if not version:
+                version = v
+            score += 1
+            sources.append(f"version assets: {v}")
+            if VERBOSE:
+                print(f"[VERBOSE]   ✓ version depuis assets: {v} → +1")
+
+    # Bonus version
+    if version:
+        score += 1
+        sources.append("bonus version")
+        if VERBOSE:
+            print("[VERBOSE]   Bonus +1 point pour version")
+
+    source = " ; ".join(sources) if sources else "aucun test"
+    if VERBOSE:
+        print(f"[VERBOSE] Score final OpenCart : {score}")
+
+    return {'score': score, 'version': version, 'source': source}
     
+
 # ──────────────────────────────────────────────────────────────
 # 4. DÉTECTION GÉNÉRIQUE (priorité WordPress sans Playwright)
 # ──────────────────────────────────────────────────────────────
 def detect_cms(base):
     """
     Détecte tous les CMS présents sur la cible via scoring.
-    Appelle chaque fonction de scoring en parallèle (WordPress, Drupal, Joomla, PrestaShop, Magento).
-    Retourne une liste de dicts pour chaque CMS dont le score >= SEUIL.
-    Chaque dict : {
-        'cms': str,
-        'version': str|None,
-        'html': str,
-        'resp_headers': dict,
-        'source': str,
-        'score': int
-    }
     """
     if VERBOSE:
         print(f"[VERBOSE] detect_cms: appelée pour {base}")
 
-    # Récupération de la page d'accueil (une seule fois)
+    # ─── UTILISER get_html AU LIEU DE get ───
     home_html = None
     home_headers = {}
     try:
-        r_home = get(base)
-        if r_home and r_home.status_code == 200:
-            if len(r_home.text.strip()) > 100:
-                home_html = r_home.text
-                home_headers = r_home.headers
-                if VERBOSE:
-                    print(f"[VERBOSE] Page d'accueil récupérée ({len(home_html)} caractères)")
-            else:
-                if VERBOSE:
-                    print("[VERBOSE] Page d'accueil trop courte ou vide, ignorée pour la détection (mais on continue)")
+        html, headers = get_html(base, max_retries=3, timeout=8)  # <-- ICI
+        if html and len(html.strip()) > 100:
+            home_html = html
+            home_headers = headers or {}
+            if VERBOSE:
+                print(f"[VERBOSE] Page d'accueil récupérée via get_html ({len(home_html)} caractères)")
         else:
             if VERBOSE:
-                code = r_home.status_code if r_home else "N/A"
-                print(f"[VERBOSE] Page d'accueil : code {code}")
+                print(f"[VERBOSE] Page d'accueil trop courte ou vide (get_html a retourné {len(html) if html else 0} caractères)")
     except Exception as e:
         if VERBOSE:
-            print(f"[VERBOSE] Erreur récupération page d'accueil : {e}")
+            print(f"[VERBOSE] Erreur récupération page d'accueil avec get_html : {e}")
 
-    # Seuil de détection (score minimum pour valider un CMS)
+    # === ARRÊT IMMÉDIAT SI PAS DE HTML ===
+    if not home_html:
+        if VERBOSE:
+            print("[VERBOSE] Pas de HTML récupéré, aucun CMS détecté")
+        return []
+
+    # ... (le reste de la fonction ne change pas)
     SEUIL = 3
     detected = []
 
-    # --- Appel de chaque fonction de scoring en parallèle ---
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
     detectors = [
         ("wordpress", detect_wordpress_score),
         ("drupal", detect_drupal_score),
@@ -1909,8 +2289,10 @@ def detect_cms(base):
         ("prestashop", detect_prestashop_score),
         ("magento", detect_magento_score),
         ("shopify", detect_shopify_score),
+        ("typo3", detect_typo3_score),
+        ("opencart", detect_opencart_score),
     ]
-    
+
     results = {}
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_to_name = {
@@ -1930,7 +2312,6 @@ def detect_cms(base):
                     print(f"[VERBOSE] Erreur pour {name} : {e}")
                 results[name] = {'score': 0, 'version': None, 'source': ''}
 
-    # Traitement des résultats
     for name, result in results.items():
         if result['score'] >= SEUIL:
             detected.append({
@@ -1944,7 +2325,6 @@ def detect_cms(base):
             if VERBOSE:
                 print(f"[VERBOSE] ✅ {name.capitalize()} détecté (score {result['score']}, version '{result['version']}') via {result['source']}")
 
-    # Élimination des doublons (même CMS) - on garde le plus haut score
     unique = {}
     for d in detected:
         cms = d['cms']
@@ -1978,17 +2358,11 @@ def scan(target, csv_out):
         warn("No CMS detected or supported")
         return
 
-    # Afficher la liste des CMS détectés
+    # Afficher la liste des CMS détectés (sans version, elle sera affichée après le scan)
     for idx, cms_info in enumerate(cms_list):
         cms = cms_info['cms']
-        version = cms_info['version']
         score = cms_info.get('score', '?')
         print(f"  [{idx+1}] CMS     : {cms.capitalize()} (score {score})")
-        if version:
-            print(f"      Version : {C.BOLD}{version}{C.RST}")
-        else:
-            warn(f"      Version not detected for {cms}")
-
     # ------------------------------------------------------------
     # 1. On prépare des variables pour cumuler les infos
     # ------------------------------------------------------------
@@ -2057,6 +2431,15 @@ def scan(target, csv_out):
             from modules.shopify import ShopifyModule
             module = ShopifyModule(base, cms_info)
             result = module.scan()
+        elif cms == "typo3":
+            from modules.typo3 import Typo3Module
+            module = Typo3Module(base, cms_info)
+            result = module.scan()
+        elif cms == "opencart":
+            from modules.opencart import OpenCartModule
+            module = OpenCartModule(base, cms_info)
+            result = module.scan()
+
         else:
             warn(f"Module for {cms} not available")
             continue

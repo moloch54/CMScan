@@ -35,8 +35,104 @@ class WordPressModule(BaseModule):
 
         return self.result
 
+    def _get_wp_rocket_version(self):
+        """Extrait la version de wp-rocket depuis rocket.pot ou readme.txt."""
+        # 1. rocket.pot
+        url = self.base + "/wp-content/plugins/wp-rocket/languages/rocket.pot"
+        try:
+            r = get(url)
+            if r and r.status_code == 200:
+                m = re.search(r'Project-Id-Version:\s*WP Rocket\s+([\d.]+)', r.text, re.I)
+                if m:
+                    return m.group(1)
+        except:
+            pass
+
+        # 2. readme.txt
+        url = self.base + "/wp-content/plugins/wp-rocket/readme.txt"
+        try:
+            r = get(url)
+            if r and r.status_code == 200:
+                m = re.search(r'Stable tag:\s*([\d.]+)', r.text, re.I)
+                if m:
+                    return m.group(1)
+        except:
+            pass
+
+        return None
+
+    def _core_version_from_assets(self):
+        """Dernier fallback : méthode WPScan (Query Parameter In Install Page)."""
+        if VERBOSE:
+            print("[VERBOSE] Core version: fallback WPScan method...")
+        
+        # 1. Télécharger /wp-admin/install.php
+        url = self.base + "/wp-admin/install.php"
+        try:
+            r = get(url, timeout=5)
+            if r and r.status_code == 200:
+                # Cherche les ver= dans les URLs des assets (comme WPScan)
+                pattern = r'(?:href|src)=["\'][^"\']*?ver=([\d.]+)["\']'
+                matches = re.findall(pattern, r.text, re.I)
+                if matches:
+                    from collections import Counter
+                    version = Counter(matches).most_common(1)[0][0]
+                    if re.match(r'\d+\.\d+(\.\d+)?', version):
+                        if VERBOSE:
+                            print(f"[VERBOSE] Core version from install.php: {version}")
+                        return version
+                # Cherche aussi "WordPress X.X" dans le texte
+                m = re.search(r'WordPress\s+([\d.]+)', r.text, re.I)
+                if m:
+                    version = m.group(1)
+                    if VERBOSE:
+                        print(f"[VERBOSE] Core version from install.php text: {version}")
+                    return version
+        except:
+            pass
+
+        # 2. Fallback : les fichiers CSS individuels (comme WPScan)
+        css_files = [
+            "/wp-includes/css/dashicons.min.css",
+            "/wp-includes/css/buttons.min.css",
+            "/wp-admin/css/forms.min.css",
+            "/wp-admin/css/l10n.min.css",
+            "/wp-admin/css/install.min.css",
+        ]
+        for css_path in css_files:
+            url = self.base + css_path
+            try:
+                r = get(url, timeout=5)
+                if r and r.status_code == 200:
+                    # Cherche ?ver= dans le contenu ou dans les URLs
+                    m = re.search(r'ver=([\d.]+)', r.text, re.I)
+                    if m:
+                        version = m.group(1)
+                        if re.match(r'\d+\.\d+(\.\d+)?', version):
+                            if VERBOSE:
+                                print(f"[VERBOSE] Core version from {css_path}: {version}")
+                            return version
+                    # Cherche aussi dans le texte
+                    m = re.search(r'WordPress\s+([\d.]+)', r.text, re.I)
+                    if m:
+                        version = m.group(1)
+                        if VERBOSE:
+                            print(f"[VERBOSE] Core version from text in {css_path}: {version}")
+                        return version
+            except:
+                pass
+
+        if VERBOSE:
+            print("[VERBOSE] Core version: WPScan fallback failed")
+        return None
+
     def _core_scan(self):
         core_version = self.version
+        
+        # Fallback : version depuis les assets (méthode WPScan)
+        if not core_version:
+            core_version = self._core_version_from_assets()
+        
         section("WordPress Core")
         if core_version:
             ok(f"Version: {C.BOLD}{core_version}{C.RST}")
@@ -99,12 +195,40 @@ class WordPressModule(BaseModule):
                             plugin_slugs.append(name)
             except: pass
         plugin_slugs = sorted(set(plugin_slugs))
+        
         plugin_versions = {}
+        
+        # D'abord, on récupère les versions depuis le HTML (rapide)
         for slug in plugin_slugs:
             ver = self._wp_ver_from_html(html, slug, "plugin", self.version)
-            if not ver:
+            if ver:
+                plugin_versions[slug] = ver
+        
+        # Ensuite, pour ceux qui n'ont pas de version, on fetch les readme.txt avec max 2 workers
+        slugs_to_fetch = [slug for slug in plugin_slugs if slug not in plugin_versions or not plugin_versions[slug]]
+        if slugs_to_fetch:
+            if VERBOSE:
+                print(f"[VERBOSE] Fetching readme.txt for {len(slugs_to_fetch)} plugins with 2 workers...")
+            
+            def fetch_version(slug):
                 ver = self._wp_fetch_version_txt(self.base + f"/wp-content/plugins/{slug}/readme.txt")
-            plugin_versions[slug] = ver
+                return slug, ver
+            
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {executor.submit(fetch_version, slug): slug for slug in slugs_to_fetch}
+                for future in as_completed(futures):
+                    slug, ver = future.result()
+                    if ver:
+                        plugin_versions[slug] = ver
+
+        # Détection spécifique de wp-rocket
+        if 'wp-rocket' in plugin_slugs:
+            rocket_ver = self._get_wp_rocket_version()
+            if rocket_ver:
+                plugin_versions['wp-rocket'] = rocket_ver
+                if VERBOSE:
+                    print(f"[VERBOSE] wp-rocket version: {rocket_ver}")
+
         section("Plugins")
         if not plugin_slugs:
             warn("No plugins detected")

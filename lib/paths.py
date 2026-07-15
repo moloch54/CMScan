@@ -143,6 +143,35 @@ SHOPIFY_SENSITIVE_PATHS = [
     {"path": "/blogs", "severity": "LOW", "description": "Blogs"},
 ]
 
+TYPO3_SENSITIVE_PATHS = [
+    ("/typo3conf/LocalConfiguration.php", "TYPO3 LocalConfiguration.php (credentials)", "HIGH"),
+    ("/typo3conf/AdditionalConfiguration.php", "TYPO3 AdditionalConfiguration.php", "HIGH"),
+    ("/typo3/sysext/core/Classes/Information/Typo3Version.php", "TYPO3 version file (info)", "LOW"),
+    ("/typo3/README.md", "TYPO3 README (version info)", "LOW"),
+    ("/typo3/sysext/core/composer.json", "TYPO3 composer.json (version)", "LOW"),
+    ("/typo3temp/", "TYPO3 temp folder (cache, assets)", "MEDIUM"),
+    ("/typo3conf/ext/", "TYPO3 extensions folder", "MEDIUM"),
+]
+
+OPENCART_SENSITIVE_PATHS = [
+    ("/config.php", "config.php exposed (credentials)", "CRITICAL"),
+    ("/admin/config.php", "admin config.php exposed", "CRITICAL"),
+    ("/system/startup.php", "system startup.php exposed", "HIGH"),
+    ("/system/library/session.php", "session library exposed", "MEDIUM"),
+    ("/system/storage/", "storage directory listing", "HIGH"),
+    ("/install/", "install directory (should be removed)", "HIGH"),
+    ("/admin/index.php", "admin panel accessible", "MEDIUM"),
+    ("/catalog/", "catalog directory listing", "MEDIUM"),
+    ("/image/", "image directory listing", "MEDIUM"),
+    ("/download/", "download directory listing", "MEDIUM"),
+    ("/vendor/", "vendor directory listing", "LOW"),
+    ("/composer.json", "composer.json exposed", "LOW"),
+    ("/composer.lock", "composer.lock exposed", "LOW"),
+    ("/admin/controller/extension/", "extension directory listing", "MEDIUM"),
+    ("/admin/model/extension/", "extension model listing", "MEDIUM"),
+]
+
+
 
 
 def _is_404(text):
