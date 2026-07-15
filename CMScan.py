@@ -1633,6 +1633,30 @@ def detect_wordpress_score(base, home_html=None, home_headers=None):
         print("[VERBOSE] ═══ Scoring WordPress ═══")
         print(f"[VERBOSE] Cible : {base}")
 
+    # ===== TEST 0 : Extraction de la version depuis meta generator et assets =====
+    if home_html:
+        # 1. Meta generator
+        m = re.search(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']WordPress\s+([\d.]+)', home_html, re.I)
+        if m:
+            version = m.group(1)
+            sources.append(f"meta generator: {version}")
+            score += 2
+            if VERBOSE:
+                print(f"[VERBOSE]   Version extraite depuis meta generator: {version} → +2 points")
+        else:
+            # 2. Fallback assets (ver=)
+            pattern = r'(?:href|src)=["\'][^"\']*?ver=([\d.]+)["\']'
+            matches = re.findall(pattern, home_html, re.I)
+            if matches:
+                from collections import Counter
+                v = Counter(matches).most_common(1)[0][0]
+                if re.match(r'\d+\.\d+(\.\d+)?', v):
+                    version = v
+                    sources.append(f"assets ver: {version}")
+                    score += 2
+                    if VERBOSE:
+                        print(f"[VERBOSE]   Version extraite depuis assets: {version} → +2 points")
+
     # ===== TEST 1 : /wp-login.php =====
     url = base + "/wp-login.php"
     if VERBOSE:
@@ -1707,7 +1731,7 @@ def detect_wordpress_score(base, home_html=None, home_headers=None):
             elif len(content) > 50:
                 m = re.search(r"\$wp_version\s*=\s*'([\d.]+)'", content)
                 if m:
-                    version = m.group(1)
+                    version = m.group(1)  # priorité à cette version si elle est plus précise
                     score += 2
                     sources.append(f"{url} (version extraite {version})")
                     if VERBOSE:
@@ -1747,25 +1771,9 @@ def detect_wordpress_score(base, home_html=None, home_headers=None):
         if VERBOSE:
             print("[VERBOSE]     ✗ absent")
 
-    # ===== TEST 5 : meta generator =====
+    # ===== TEST 5 : signaux HTML (UNIQUEMENT INTERNES) =====
     if VERBOSE:
-        print("[VERBOSE]   Test 5 : meta generator WordPress")
-    if home_html:
-        if re.search(r'<meta name="generator" content="WordPress', home_html, re.I):
-            score += 2
-            sources.append("meta generator WordPress")
-            if VERBOSE:
-                print("[VERBOSE]     ✓ trouvé → +2 points")
-        else:
-            if VERBOSE:
-                print("[VERBOSE]     ✗ absent")
-    else:
-        if VERBOSE:
-            print("[VERBOSE]     ✗ pas de HTML")
-
-    # ===== TEST 6 : signaux HTML (UNIQUEMENT INTERNES) =====
-    if VERBOSE:
-        print("[VERBOSE]   Test 6 : Signaux HTML (seulement internes)")
+        print("[VERBOSE]   Test 5 : Signaux HTML (seulement internes)")
 
     target_domain = urlparse(base).netloc
     if target_domain.startswith("www."):
@@ -1837,6 +1845,7 @@ def detect_wordpress_score(base, home_html=None, home_headers=None):
         print("[VERBOSE] ═══ Fin scoring WordPress ═══")
 
     return {'score': score, 'version': version, 'source': source}
+
 
 import re
 import json
