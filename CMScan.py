@@ -332,88 +332,144 @@ def get_html(base, max_retries=3, timeout=8):
 # ──────────────────────────────────────────────────────────────
 
 def _extract_wp_version(base):
-    """Extrait la version WordPress avec toutes les méthodes possibles."""
+    """
+    Extrait la version WordPress avec les méthodes WPScan :
+    - Feed RSS (/feed)
+    - /wp-admin/install.php (cherche ?ver= dans les assets)
+    - /wp-admin/ (assets)
+    - Fichiers CSS core (/wp-includes/css/, /wp-admin/css/)
+    - Meta generator (fallback)
+    - readme.html (fallback)
+    """
     version = None
 
-    # 1. Meta generator (page d'accueil) - on utilise get_html
-    html, headers = get_html(base, max_retries=2, timeout=8)
+    # 1. Feed RSS (le plus fiable)
+    if VERBOSE:
+        print("[VERBOSE] _extract_wp_version: trying feed RSS")
+    try:
+        r = get(base + "/feed", timeout=5)
+        if r and r.status_code == 200:
+            m = re.search(r'<generator>https://wordpress.org/\?v=([\d\.]+)</generator>', r.text, re.I)
+            if m:
+                version = m.group(1)
+                if VERBOSE:
+                    print(f"[VERBOSE] Version WP via feed RSS: {version}")
+                return version  # on retourne tout de suite
+    except:
+        pass
+
+    # 2. /wp-admin/install.php (cherche les ?ver= dans les assets)
+    if VERBOSE:
+        print("[VERBOSE] _extract_wp_version: trying /wp-admin/install.php")
+    try:
+        r = get(base + "/wp-admin/install.php", timeout=5)
+        if r and r.status_code == 200:
+            # Cherche les ?ver= dans les URLs des assets (seulement ceux de core)
+            pattern = r'(?:href|src)=["\'](?:[^"\']*/(wp-includes|wp-admin)/[^"\']*)\?ver=([\d.]+)["\']'
+            matches = re.findall(pattern, r.text, re.I)
+            if matches:
+                from collections import Counter
+                versions = [v for _, v in matches]
+                if versions:
+                    v = Counter(versions).most_common(1)[0][0]
+                    if re.match(r'\d+\.\d+(\.\d+)?', v):
+                        if VERBOSE:
+                            print(f"[VERBOSE] Version WP via install.php assets: {v}")
+                        return v
+            # Cherche "WordPress X.X" dans le texte
+            m = re.search(r'WordPress\s+([\d.]+)', r.text, re.I)
+            if m:
+                version = m.group(1)
+                if VERBOSE:
+                    print(f"[VERBOSE] Version WP via install.php text: {version}")
+                return version
+    except:
+        pass
+
+    # 3. /wp-admin/ (cherche les ?ver=)
+    if VERBOSE:
+        print("[VERBOSE] _extract_wp_version: trying /wp-admin/")
+    try:
+        r = get(base + "/wp-admin/", timeout=5)
+        if r and r.status_code == 200:
+            pattern = r'(?:href|src)=["\'](?:[^"\']*/(wp-includes|wp-admin)/[^"\']*)\?ver=([\d.]+)["\']'
+            matches = re.findall(pattern, r.text, re.I)
+            if matches:
+                from collections import Counter
+                versions = [v for _, v in matches]
+                if versions:
+                    v = Counter(versions).most_common(1)[0][0]
+                    if re.match(r'\d+\.\d+(\.\d+)?', v):
+                        if VERBOSE:
+                            print(f"[VERBOSE] Version WP via /wp-admin/ assets: {v}")
+                        return v
+    except:
+        pass
+
+    # 4. Fichiers CSS individuels (comme WPScan)
+    if VERBOSE:
+        print("[VERBOSE] _extract_wp_version: trying individual CSS files")
+    css_files = [
+        "/wp-includes/css/dashicons.min.css",
+        "/wp-includes/css/buttons.min.css",
+        "/wp-admin/css/forms.min.css",
+        "/wp-admin/css/l10n.min.css",
+        "/wp-admin/css/install.min.css",
+    ]
+    for css_path in css_files:
+        try:
+            r = get(base + css_path, timeout=3)
+            if r and r.status_code == 200:
+                # Cherche ?ver= dans le contenu
+                m = re.search(r'ver=([\d.]+)', r.text, re.I)
+                if m:
+                    v = m.group(1)
+                    if re.match(r'\d+\.\d+(\.\d+)?', v):
+                        if VERBOSE:
+                            print(f"[VERBOSE] Version WP from {css_path}: {v}")
+                        return v
+                # Cherche "WordPress X.X" dans le texte
+                m = re.search(r'WordPress\s+([\d.]+)', r.text, re.I)
+                if m:
+                    v = m.group(1)
+                    if VERBOSE:
+                        print(f"[VERBOSE] Version WP from text in {css_path}: {v}")
+                    return v
+        except:
+            pass
+
+    # 5. Meta generator (fallback)
+    if VERBOSE:
+        print("[VERBOSE] _extract_wp_version: trying meta generator")
+    html, _ = get_html(base, max_retries=2, timeout=8)
     if html:
-        m = re.search(r'<meta name="generator" content="WordPress ([\d.]+)"', html, re.I)
+        m = re.search(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']WordPress\s+([\d.]+)', html, re.I)
         if m:
             version = m.group(1)
             if VERBOSE:
                 print(f"[VERBOSE] Version WP via meta: {version}")
+            return version
 
-    # 2. /wp-admin/ (assets avec ver=)
-    if not version:
-        r_admin = get(base + "/wp-admin/")
-        if r_admin and r_admin.status_code == 200:
-            m = re.search(r'\/wp-admin\/([^/\"\';]+).*[?"\']ver=([\d]+\.[\d\.]+)', r_admin.text)
-            if m:
-                version = m.group(2)
-                if "Download" in version or ".com" in version:
-                    version = None
-                if VERBOSE:
-                    print(f"[VERBOSE] Version WP via wp-admin: {version}")
-
-    # 3. /readme.html
-    if not version:
-        r_readme = get(base + "/readme.html")
-        if r_readme and r_readme.status_code == 200:
-            m = re.search(r'<br />(\d+\.\d+[\.\d]*)', r_readme.text)
+    # 6. readme.html
+    if VERBOSE:
+        print("[VERBOSE] _extract_wp_version: trying readme.html")
+    try:
+        r = get(base + "/readme.html", timeout=3)
+        if r and r.status_code == 200:
+            m = re.search(r'<br />(\d+\.\d+[\.\d]*)', r.text, re.I)
             if not m:
-                m = re.search(r'Version (\d+\.\d+[\.\d]*)', r_readme.text)
+                m = re.search(r'Version (\d+\.\d+[\.\d]*)', r.text, re.I)
             if m:
                 version = m.group(1)
                 if VERBOSE:
                     print(f"[VERBOSE] Version WP via readme: {version}")
+                return version
+    except:
+        pass
 
-    # 4. /wp-links-opml.php
-    if not version:
-        r_opml = get(base + "/wp-links-opml.php")
-        if r_opml and r_opml.status_code == 200:
-            m = re.search(r'generator="WordPress/(\d+\.\d+[\.\d]*)"', r_opml.text)
-            if m:
-                version = m.group(1)
-                if VERBOSE:
-                    print(f"[VERBOSE] Version WP via opml: {version}")
-
-    # 5. /feed (RSS)
-    if not version:
-        r_feed = get(base + "/feed")
-        if r_feed and r_feed.status_code == 200:
-            m = re.search(r'<generator>https://wordpress.org/\?v=([\d\.]+)</generator>', r_feed.text)
-            if m:
-                version = m.group(1)
-                if VERBOSE:
-                    print(f"[VERBOSE] Version WP via feed: {version}")
-
-    # 6. /wp-includes/version.php
-    if not version:
-        r_ver = get(base + "/wp-includes/version.php")
-        if r_ver and r_ver.status_code == 200:
-            m = re.search(r"\$wp_version\s*=\s*'([\d\.]+)'", r_ver.text)
-            if m:
-                version = m.group(1)
-                if VERBOSE:
-                    print(f"[VERBOSE] Version WP via version.php: {version}")
-
-    # 7. NOUVEAU : depuis les assets avec ?ver= (uniquement ceux du core)
-    if not version and html:
-        # On cherche les assets dans les dossiers core
-        pattern = r'(?:href|src)=["\'](?:[^"\']*/(wp-includes|wp-admin)/[^"\']*)\?ver=([\d.]+)["\']'
-        matches = re.findall(pattern, html, re.I)
-        if matches:
-            from collections import Counter
-            # On prend la version la plus fréquente parmi les assets core
-            versions = [v for _, v in matches]
-            if versions:
-                v = Counter(versions).most_common(1)[0][0]
-                if re.match(r'\d+\.\d+(\.\d+)?', v):
-                    version = v
-                    if VERBOSE:
-                        print(f"[VERBOSE] Version WP via assets core (ver=): {version}")
-    return version
+    if VERBOSE:
+        print("[VERBOSE] _extract_wp_version: all methods failed")
+    return None
 
 # ──────────────────────────────────────────────────────────────
 # 3. DÉTECTIONS PAR CMS
@@ -2328,17 +2384,23 @@ def detect_cms(base):
 
     for name, result in results.items():
         if result['score'] >= SEUIL:
+            version = result['version']
+            # Pour WordPress, on utilise _extract_wp_version comme source fiable
+            if name == "wordpress":
+                version = _extract_wp_version(base)
+                if VERBOSE:
+                    print(f"[VERBOSE] ✅ {name.capitalize()} détecté (score {result['score']}, version '{version}') via {result['source']} (scoring version was '{result['version']}')")
+            else:
+                if VERBOSE:
+                    print(f"[VERBOSE] ✅ {name.capitalize()} détecté (score {result['score']}, version '{version}') via {result['source']}")
             detected.append({
                 'cms': name,
-                'version': result['version'],
+                'version': version,
                 'html': home_html or "",
                 'resp_headers': home_headers or {},
                 'source': result['source'],
                 'score': result['score']
             })
-            if VERBOSE:
-                print(f"[VERBOSE] ✅ {name.capitalize()} détecté (score {result['score']}, version '{result['version']}') via {result['source']}")
-
     unique = {}
     for d in detected:
         cms = d['cms']
