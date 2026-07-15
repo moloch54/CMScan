@@ -192,7 +192,6 @@ class WordPressModule(BaseModule):
         # Meta tags (ex: google-site-kit)
         meta_matches = re.findall(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
         for meta in meta_matches:
-            # Ex: "Site Kit by Google 1.183.0"
             m = re.search(r'Site Kit by Google\s+([\d.]+)', meta, re.I)
             if m:
                 if 'google-site-kit' not in plugin_slugs:
@@ -218,6 +217,7 @@ class WordPressModule(BaseModule):
             for name, ver in self._extract_with_template(html, regex, "1", tname):
                 if name and name not in plugin_slugs:
                     plugin_slugs.append(name)
+        
         spiders = self._load_spiders()
         for sp in spiders:
             if len(sp) < 3: continue
@@ -233,27 +233,16 @@ class WordPressModule(BaseModule):
                         if name not in plugin_slugs:
                             plugin_slugs.append(name)
             except: pass
+        
         plugin_slugs = sorted(set(plugin_slugs))
         
+        # ═══ PRIORITÉ : readme.txt en premier pour TOUS les plugins ═══
         plugin_versions = {}
+        slugs_to_fetch = plugin_slugs.copy()
         
-        # D'abord, on récupère les versions depuis le HTML (rapide)
-        for slug in plugin_slugs:
-            # Vérifier si on a une version depuis meta ou commentaire
-            if slug in self._plugin_versions_from_meta:
-                plugin_versions[slug] = self._plugin_versions_from_meta[slug]
-            elif slug in self._plugin_versions_from_comment:
-                plugin_versions[slug] = self._plugin_versions_from_comment[slug]
-            else:
-                ver = self._wp_ver_from_html(html, slug, "plugin", self.version)
-                if ver:
-                    plugin_versions[slug] = ver
-        
-        # Ensuite, pour ceux qui n'ont pas de version, on fetch les readme.txt avec max 2 workers
-        slugs_to_fetch = [slug for slug in plugin_slugs if slug not in plugin_versions or not plugin_versions[slug]]
         if slugs_to_fetch:
             if VERBOSE:
-                print(f"[VERBOSE] Fetching readme.txt for {len(slugs_to_fetch)} plugins with 2 workers...")
+                print(f"[VERBOSE] Fetching readme.txt for {len(slugs_to_fetch)} plugins with 2 workers (PRIORITY)...")
             
             def fetch_version(slug):
                 ver = self._wp_fetch_version_txt(self.base + f"/wp-content/plugins/{slug}/readme.txt")
@@ -265,6 +254,26 @@ class WordPressModule(BaseModule):
                     slug, ver = future.result()
                     if ver:
                         plugin_versions[slug] = ver
+        
+        # ═══ FALLBACK : pour ceux qui n'ont pas de version via readme.txt ═══
+        for slug in plugin_slugs:
+            if slug in plugin_versions and plugin_versions[slug]:
+                continue  # déjà trouvé via readme.txt, on passe
+            
+            # Fallback 1 : meta tag (ex: google-site-kit)
+            if slug in self._plugin_versions_from_meta:
+                plugin_versions[slug] = self._plugin_versions_from_meta[slug]
+                continue
+            
+            # Fallback 2 : commentaire (ex: wordpress-seo)
+            if slug in self._plugin_versions_from_comment:
+                plugin_versions[slug] = self._plugin_versions_from_comment[slug]
+                continue
+            
+            # Fallback 3 : depuis les URLs ?ver= dans le HTML
+            ver = self._wp_ver_from_html(html, slug, "plugin", self.version)
+            if ver:
+                plugin_versions[slug] = ver
 
         # Détection spécifique de wp-rocket
         if 'wp-rocket' in plugin_slugs:
@@ -286,7 +295,7 @@ class WordPressModule(BaseModule):
                     v.package = f"plugin:{slug}"
                     self.result.vulns.append(v)
                     print_vuln(v)
-
+                    
     def _authors_scan(self):
         time.sleep(3)
         section("Authors")
@@ -528,6 +537,11 @@ class WordPressModule(BaseModule):
         return ""
 
     def _wp_fetch_version_txt(self, url):
+        """
+        Tente d'extraire la version depuis un fichier readme.
+        Essaie readme.txt et README.txt (majuscules).
+        """
+        # 1. Essayer readme.txt (minuscules)
         try:
             r = get(url, timeout=3)
             if r and r.status_code == 200:
@@ -537,7 +551,23 @@ class WordPressModule(BaseModule):
                 m = re.search(r'(?m)^Version:\s*([\d.]+)', r.text)
                 if m:
                     return m.group(1)
-        except: pass
+        except:
+            pass
+
+        # 2. Essayer README.txt (majuscules)
+        url_upper = url.replace("readme.txt", "README.txt")
+        try:
+            r = get(url_upper, timeout=3)
+            if r and r.status_code == 200:
+                m = re.search(r'Stable tag:\s*([\d.]+)', r.text, re.I)
+                if m and m.group(1).lower() != "trunk":
+                    return m.group(1)
+                m = re.search(r'(?m)^Version:\s*([\d.]+)', r.text)
+                if m:
+                    return m.group(1)
+        except:
+            pass
+
         return ""
 
     def _load_templates(self):
