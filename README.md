@@ -1,31 +1,30 @@
 # CMScan
 
-**CMScan** est un scanner de sécurité unifié pour sites WordPress, Drupal, Joomla, PrestaShop et Magento  
-Il détecte les versions, énumère les utilisateurs, vérifie les vulnérabilités et exporte les résultats en CSV.
+**CMScan** is a unified security scanner for WordPress, Drupal, Joomla, PrestaShop, Shopify, Magento, TYPO3, and OpenCart websites. 
 
-## Fonctionnalités
+**No api-key, no limitation**   
+It detects CMS versions, enumerates users, checks for known vulnerabilities, and exports the results to CSV.
 
-- ✅ Détection de 5 CMS : WordPress, Drupal, Joomla, PrestaShop, Magento
-- ✅ Énumération des utilisateurs (méthodes WP, Drupal, Joomla, PrestaShop)
-- ✅ Vérification des vulnérabilités via :
-    - [wpvulnerability.net](https://www.wpvulnerability.net/) (WordPress)
-    - [OSV.dev](https://osv.dev/) (Drupal)
-    - [FriendsOfPHP](https://github.com/FriendsOfPHP/security-advisories) (WP, Drupal, Joomla, PrestaShop)
-    - [NVD API](https://nvd.nist.gov/developers/vulnerabilities) (Joomla)
-- ✅ Détection des chemins sensibles (wp-config, git, env, etc.)
-- ✅ Audit des en‑têtes de sécurité (HSTS, CSP, X‑Frame‑Options, etc.)
-- ✅ Recherche d’exploits via Searchsploit
-- ✅ Export CSV complet
-- ✅ Support du mode `--host` pour serveurs mutualisés
-- ✅ Compteur de requêtes HTTP (hors API externes)
-- ✅ Gestion des 403 via rotation d’user‑agents
+## Features
+
+- ✅ Vulnerability checking through:
+    - [wpvulnerability.net](https://www.wpvulnerability.net/)
+    - [OSV.dev](https://osv.dev/)
+    - [FriendsOfPHP Security Advisories](https://github.com/FriendsOfPHP/security-advisories)
+    - [NVD API](https://nvd.nist.gov/developers/vulnerabilities)
+- ✅ Detection of sensitive files and paths (wp-config, .git, .env, etc.)
+- ✅ Security header auditing (HSTS, CSP, X-Frame-Options, etc.)
+- ✅ Comprehensive CSV export
+- ✅ `--host` mode support for shared hosting environments
+- ✅ Automatic 403 bypass using User-Agent rotation
 
 ## Installation
 
-### Via l'installateur (recommandé)
+### Using the installer (recommended)
 
 ```bash
 git clone https://github.com/moloch54/CMScan
 cd CMScan
 chmod +x install.sh
 ./install.sh
+```
