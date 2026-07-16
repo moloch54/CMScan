@@ -2544,17 +2544,24 @@ def scan(target, csv_out):
         if result.version:
             cms_info['version'] = result.version   # <--- AJOUTE CETTE LIGNE
 
-        # ==== ON INJECTE TOUTES LES INFOS DANS result ====
+        # ==== ON RÉCUPÈRE LES INFOS DU MODULE ET ON LES CUMULE ====
+        # Auteurs (récupérés par le module)
+        if result.authors:
+            all_authors.extend(result.authors)
+        
+        # Emails (déjà récupérés depuis la page)
         result.emails = all_emails
+        
+        # Headers (déjà récupérés)
         result.headers = headers_issues
-        result.authors = all_authors
-        # On cumule aussi les paths si le module en a trouvé
+        
+        # Paths (trouvés par le module)
         if result.paths:
             all_paths.extend(result.paths)
         else:
-            result.paths = []   # pour éviter None
+            result.paths = []
 
-        # Cumul des vulnérabilités
+        # Vulnérabilités
         all_vulns.extend(result.vulns)
 
     # ------------------------------------------------------------

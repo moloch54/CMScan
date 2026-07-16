@@ -630,6 +630,7 @@ class WordPressModule(BaseModule):
         """
         Tente d'extraire la version depuis readme.txt sur plusieurs chemins.
         Essaie /wp-content/plugins/, /content/plugins/, /app/plugins/.
+        Cherche Stable tag, Version, et Changelog.
         """
         base_paths = [
             f"/wp-content/plugins/{slug}/readme.txt",
@@ -645,17 +646,30 @@ class WordPressModule(BaseModule):
             try:
                 r = get(url, timeout=3)
                 if r and r.status_code == 200:
+                    # 1. Stable tag
                     m = re.search(r'Stable tag:\s*([\d.]+)', r.text, re.I)
                     if m and m.group(1).lower() != "trunk":
                         return m.group(1)
+                    
+                    # 2. Version
                     m = re.search(r'(?m)^Version:\s*([\d.]+)', r.text)
+                    if m:
+                        return m.group(1)
+                    
+                    # 3. Changelog (cherche "= X.X.X =" ou "Version X.X.X")
+                    m = re.search(r'=+\s*([\d.]+)\s*=+', r.text)
+                    if m:
+                        return m.group(1)
+                    
+                    # 4. Cherche "Version X.X.X" dans le texte
+                    m = re.search(r'Version\s+([\d.]+)', r.text, re.I)
                     if m:
                         return m.group(1)
             except:
                 pass
         
         return ""
-
+        
     def _load_templates(self):
         templates = []
         if not os.path.isdir(self.TEMPLATES_DIR):
