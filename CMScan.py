@@ -150,41 +150,60 @@ def needs_wp_vuln_update():
         return True
 
 def auto_update():
-    """Vérifie automatiquement les mises à jour sur GitHub et se relance si nécessaire."""
+    """Vérifie les mises à jour et se relance si nécessaire."""
     if not os.path.exists(".git"):
         return
+
+    # Fichier de verrouillage pour éviter les boucles infinies
+    LOCK_FILE = "/tmp/cmscan_update.lock"
+
+    # Si le fichier de verrouillage existe, on le supprime et on saute la mise à jour
+    if os.path.exists(LOCK_FILE):
+        os.remove(LOCK_FILE)
+        return
+
     try:
         import subprocess
         import urllib.request
         import time
 
-        url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
-        with urllib.request.urlopen(url, timeout=3) as response:
-            remote_version = response.read().decode('utf-8').strip()
-
+        # Lire la version locale
         if os.path.exists("version.txt"):
             with open("version.txt", "r") as f:
                 local_version = f.read().strip()
         else:
             local_version = "0.0"
 
+        # Récupérer la version distante
+        url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
+        with urllib.request.urlopen(url, timeout=3) as response:
+            remote_version = response.read().decode('utf-8').strip()
+
         if local_version != remote_version:
             print(f"\n{C.GREEN}{C.BOLD}[+] Nouvelle version disponible : {remote_version} (actuelle : {local_version}){C.RST}")
             print(f"{C.CYAN}[*] Téléchargement de la mise à jour...{C.RST}")
+
+            # Pull
             subprocess.run(["git", "pull", "--quiet"], check=True)
 
-            # ═══ NOUVEAU : Mise à jour de la base WordPress après pull ═══
+            # Mettre à jour les bases de vulnérabilités
             update_wordpress_vuln_db()
 
-            with open("version.txt", "r") as f:
-                new_version = f.read().strip()
-            print(f"{C.GREEN}{C.BOLD}[✓] Mise à jour vers la version {new_version} effectuée !{C.RST}")
+            # Créer le fichier de verrouillage AVANT le redémarrage
+            with open(LOCK_FILE, "w") as f:
+                f.write("1")
+
+            print(f"{C.GREEN}{C.BOLD}[✓] Mise à jour vers la version {remote_version} effectuée !{C.RST}")
             print(f"{C.CYAN}[*] Redémarrage du script...{C.RST}\n")
             time.sleep(1)
             os.execv(sys.executable, [sys.executable] + sys.argv)
+
     except Exception as e:
+        # Silencieux en cas d'erreur
         pass
-        
+
+
+     
 try:
     with open("version.txt", "r") as f:
         VERSION = f.read().strip()
