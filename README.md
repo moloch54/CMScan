@@ -1,5 +1,7 @@
 # CMScan
 
+![CMScan screenshot](CMScan.png)
+
 **CMScan** is a unified security scanner for WordPress, Drupal, Joomla, PrestaShop, Shopify, Magento, TYPO3, and OpenCart websites. 
 
 **No api-key, no limitation**   
@@ -28,3 +30,10 @@ cd CMScan
 chmod +x install.sh
 ./install.sh
 ```
+
+## Usage
+
+```bash
+python3 CMScan.py -L target.com  
+```
+
