@@ -199,7 +199,7 @@ class WordPressModule(BaseModule):
                     v.package = f"theme:{slug}"
                     self.result.vulns.append(v)
                     print_vuln(v)
-                    
+
     def _plugins_scan(self):
         html = self.html
         plugin_slugs = self._wp_slugs_from_html(html, "plugin")
@@ -217,11 +217,15 @@ class WordPressModule(BaseModule):
                     print(f"[VERBOSE] Plugin detected from meta: google-site-kit {m.group(1)}")
         # ═══ Détection générique des plugins dans les commentaires ═══
         # Exemple: "Stream WordPress user activity plugin v4.2.2"
+        # ═══ Détection générique des plugins dans les commentaires ═══
+        # Exemple: "Stream WordPress user activity plugin v4.2.2"
         comment_plugin_patterns = [
             (r'Stream WordPress user activity plugin v([\d.]+)', 'stream'),
             (r'Yoast SEO Premium plugin v([\d.]+)', 'wordpress-seo-premium'),
-            # Ajouter d'autres patterns si besoin
+            (r'All in One SEO Pack\s+([\d.]+)', 'all-in-one-seo-pack'),
+            (r'<!--[^>]*WP Rocket[^>]*-->', 'wp-rocket'),  # <--- MODIFIÉ
         ]
+        
         for pattern, slug in comment_plugin_patterns:
             matches = re.findall(pattern, html, re.I)
             if matches:
