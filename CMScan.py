@@ -154,10 +154,8 @@ def auto_update():
     if not os.path.exists(".git"):
         return
 
-    # Fichier de verrouillage pour éviter les boucles infinies
     LOCK_FILE = "/tmp/cmscan_update.lock"
 
-    # Si le fichier de verrouillage existe, on le supprime et on saute la mise à jour
     if os.path.exists(LOCK_FILE):
         os.remove(LOCK_FILE)
         return
@@ -167,14 +165,12 @@ def auto_update():
         import urllib.request
         import time
 
-        # Lire la version locale
         if os.path.exists("version.txt"):
             with open("version.txt", "r") as f:
                 local_version = f.read().strip()
         else:
             local_version = "0.0"
 
-        # Récupérer la version distante
         url = "https://raw.githubusercontent.com/moloch54/CMScan/main/version.txt"
         with urllib.request.urlopen(url, timeout=3) as response:
             remote_version = response.read().decode('utf-8').strip()
@@ -183,13 +179,23 @@ def auto_update():
             print(f"\n{C.GREEN}{C.BOLD}[+] Nouvelle version disponible : {remote_version} (actuelle : {local_version}){C.RST}")
             print(f"{C.CYAN}[*] Téléchargement de la mise à jour...{C.RST}")
 
-            # Pull
-            subprocess.run(["git", "pull", "--quiet"], check=True)
+            # Exécuter git pull
+            result = subprocess.run(["git", "pull", "--quiet"], capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"{C.RED}[!] Git pull failed: {result.stderr}{C.RST}")
+                return
+
+            # ═══ MESSAGE DE CONFIRMATION DU PULL ═══
+            print(f"{C.GREEN}[✓] Git pull réussi.{C.RST}")
+
+            # Forcer l'écriture de version.txt avec la version distante
+            with open("version.txt", "w") as f:
+                f.write(remote_version)
 
             # Mettre à jour les bases de vulnérabilités
             update_wordpress_vuln_db()
 
-            # Créer le fichier de verrouillage AVANT le redémarrage
+            # Créer le verrou AVANT le redémarrage
             with open(LOCK_FILE, "w") as f:
                 f.write("1")
 
@@ -199,10 +205,7 @@ def auto_update():
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
     except Exception as e:
-        # Silencieux en cas d'erreur
-        pass
-
-
+        print(f"[!] Auto-update error: {e}")
      
 try:
     with open("version.txt", "r") as f:
