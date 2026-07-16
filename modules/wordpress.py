@@ -164,13 +164,29 @@ class WordPressModule(BaseModule):
         html = self.html
         theme_slugs = self._wp_slugs_from_html(html, "theme")
         theme_versions = {}
+        
+        # 1. Détection passive depuis l'URL (?ver=)
+        pattern = r'<link[^>]+href=["\']([^"\']*/(?:wp-)?content/themes/([^/]+)/style\.css[^"\']*)["\']'
+        matches = re.findall(pattern, html, re.I)
+        for full_url, slug in matches:
+            if slug not in theme_slugs:
+                theme_slugs.append(slug)
+            ver_match = re.search(r'[?&]ver=([\d.]+(?:-alpha|-beta|-rc)?)', full_url, re.I)
+            if ver_match:
+                version = ver_match.group(1)
+                theme_versions[slug] = version
+                if VERBOSE:
+                    print(f"[VERBOSE] Theme version from style.css URL: {slug} {version}")
+        
+        # 2. Pour ceux qui n'ont pas de version, on cherche readme.txt (prioritaire)
         for slug in theme_slugs:
-            theme_versions[slug] = self._wp_ver_from_html(html, slug, "theme", self.version)
-        for slug in theme_slugs:
-            if not theme_versions.get(slug):
-                ver = self._wp_fetch_version_txt(self.base + f"/wp-content/themes/{slug}/style.css")
+            if slug not in theme_versions or not theme_versions[slug]:
+                ver = self._wp_fetch_theme_version(slug)  # readme.txt d'abord
                 if ver:
                     theme_versions[slug] = ver
+                    if VERBOSE:
+                        print(f"[VERBOSE] Theme version from readme/style: {slug} {ver}")
+        
         section("Themes")
         if not theme_slugs:
             warn("No themes detected")
@@ -183,7 +199,7 @@ class WordPressModule(BaseModule):
                     v.package = f"theme:{slug}"
                     self.result.vulns.append(v)
                     print_vuln(v)
-
+                    
     def _plugins_scan(self):
         html = self.html
         plugin_slugs = self._wp_slugs_from_html(html, "plugin")
@@ -199,6 +215,22 @@ class WordPressModule(BaseModule):
                 self._plugin_versions_from_meta['google-site-kit'] = m.group(1)
                 if VERBOSE:
                     print(f"[VERBOSE] Plugin detected from meta: google-site-kit {m.group(1)}")
+        # ═══ Détection générique des plugins dans les commentaires ═══
+        # Exemple: "Stream WordPress user activity plugin v4.2.2"
+        comment_plugin_patterns = [
+            (r'Stream WordPress user activity plugin v([\d.]+)', 'stream'),
+            (r'Yoast SEO Premium plugin v([\d.]+)', 'wordpress-seo-premium'),
+            # Ajouter d'autres patterns si besoin
+        ]
+        for pattern, slug in comment_plugin_patterns:
+            matches = re.findall(pattern, html, re.I)
+            if matches:
+                version = matches[0]
+                if slug not in plugin_slugs:
+                    plugin_slugs.append(slug)
+                self._plugin_versions_from_comment[slug] = version
+                if VERBOSE:
+                    print(f"[VERBOSE] Plugin detected from comment: {slug} {version}")
         
         # Commentaires (ex: wordpress-seo)
         comment_matches = re.findall(r'<!--[^>]*optimized with the Yoast SEO plugin v([\d.]+)[^>]*-->', html, re.I)
@@ -245,7 +277,7 @@ class WordPressModule(BaseModule):
                 print(f"[VERBOSE] Fetching readme.txt for {len(slugs_to_fetch)} plugins with 2 workers (PRIORITY)...")
             
             def fetch_version(slug):
-                ver = self._wp_fetch_version_txt(self.base + f"/wp-content/plugins/{slug}/readme.txt")
+                ver = self._wp_fetch_version_txt(slug)                
                 return slug, ver
             
             with ThreadPoolExecutor(max_workers=2) as executor:
@@ -525,49 +557,99 @@ class WordPressModule(BaseModule):
         return {u for u in usernames if u}
 
     def _wp_slugs_from_html(self, html, kind):
-        pat = re.compile(rf'/wp-content/{kind}s/([a-z0-9][a-z0-9_\-]+)/', re.I)
+        # Capture à la fois /wp-content/plugins/ et /content/plugins/ (et aussi /wp-content/themes/)
+        pat = re.compile(rf'/(?:wp-)?content/{kind}s/([a-z0-9][a-z0-9_\-]+)/', re.I)
         return sorted(set(pat.findall(html)))
 
     def _wp_ver_from_html(self, html, slug, kind, core_ver):
-        pat = re.compile(rf'/wp-content/{kind}s/{re.escape(slug)}/[^"\']*[?&]ver=([\d.]+)', re.I)
+        # Capture à la fois /wp-content/plugins/ et /content/plugins/
+        pat = re.compile(rf'/(?:wp-)?content/{kind}s/{re.escape(slug)}/[^"\']*[?&]ver=([\d.]+)', re.I)
         versions = [v for v in pat.findall(html) if v != core_ver and "." in v]
         if versions:
             from collections import Counter
             return Counter(versions).most_common(1)[0][0]
         return ""
 
-    def _wp_fetch_version_txt(self, url):
+    def _wp_fetch_theme_version(self, slug):
         """
-        Tente d'extraire la version depuis un fichier readme.
-        Essaie readme.txt et README.txt (majuscules).
+        Tente d'extraire la version du thème :
+        1. readme.txt / README.txt (prioritaire)
+        2. style.css (fallback)
+        Essaie /wp-content/themes/, /content/themes/, /app/themes/.
         """
-        # 1. Essayer readme.txt (minuscules)
-        try:
-            r = get(url, timeout=3)
-            if r and r.status_code == 200:
-                m = re.search(r'Stable tag:\s*([\d.]+)', r.text, re.I)
-                if m and m.group(1).lower() != "trunk":
-                    return m.group(1)
-                m = re.search(r'(?m)^Version:\s*([\d.]+)', r.text)
-                if m:
-                    return m.group(1)
-        except:
-            pass
+        # 1. PRIORITAIRE : readme.txt / README.txt
+        readme_paths = [
+            f"/wp-content/themes/{slug}/readme.txt",
+            f"/content/themes/{slug}/readme.txt",
+            f"/app/themes/{slug}/readme.txt",
+            f"/wp-content/themes/{slug}/README.txt",
+            f"/content/themes/{slug}/README.txt",
+            f"/app/themes/{slug}/README.txt",
+        ]
+        
+        for path in readme_paths:
+            url = self.base + path
+            try:
+                r = get(url, timeout=3)
+                if r and r.status_code == 200:
+                    m = re.search(r'Stable tag:\s*([\d.]+(?:-alpha|-beta|-rc)?)', r.text, re.I)
+                    if m and m.group(1).lower() != "trunk":
+                        return m.group(1)
+                    m = re.search(r'(?m)^Version:\s*([\d.]+(?:-alpha|-beta|-rc)?)', r.text)
+                    if m:
+                        return m.group(1)
+            except:
+                pass
+        
+        # 2. FALLBACK : style.css
+        css_paths = [
+            f"/wp-content/themes/{slug}/style.css",
+            f"/content/themes/{slug}/style.css",
+            f"/app/themes/{slug}/style.css",
+        ]
+        
+        for path in css_paths:
+            url = self.base + path
+            try:
+                r = get(url, timeout=3)
+                if r and r.status_code == 200:
+                    # Cherche "Version: X.X.X" dans le style.css
+                    m = re.search(r'(?m)^Version:\s*([\d.]+(?:-alpha|-beta|-rc)?)', r.text, re.I)
+                    if m:
+                        return m.group(1)
+            except:
+                pass
+        
+        return ""
 
-        # 2. Essayer README.txt (majuscules)
-        url_upper = url.replace("readme.txt", "README.txt")
-        try:
-            r = get(url_upper, timeout=3)
-            if r and r.status_code == 200:
-                m = re.search(r'Stable tag:\s*([\d.]+)', r.text, re.I)
-                if m and m.group(1).lower() != "trunk":
-                    return m.group(1)
-                m = re.search(r'(?m)^Version:\s*([\d.]+)', r.text)
-                if m:
-                    return m.group(1)
-        except:
-            pass
-
+    def _wp_fetch_version_txt(self, slug):
+        """
+        Tente d'extraire la version depuis readme.txt sur plusieurs chemins.
+        Essaie /wp-content/plugins/, /content/plugins/, /app/plugins/.
+        """
+        base_paths = [
+            f"/wp-content/plugins/{slug}/readme.txt",
+            f"/content/plugins/{slug}/readme.txt",
+            f"/app/plugins/{slug}/readme.txt",
+            f"/wp-content/plugins/{slug}/README.txt",
+            f"/content/plugins/{slug}/README.txt",
+            f"/app/plugins/{slug}/README.txt",
+        ]
+        
+        for path in base_paths:
+            url = self.base + path
+            try:
+                r = get(url, timeout=3)
+                if r and r.status_code == 200:
+                    m = re.search(r'Stable tag:\s*([\d.]+)', r.text, re.I)
+                    if m and m.group(1).lower() != "trunk":
+                        return m.group(1)
+                    m = re.search(r'(?m)^Version:\s*([\d.]+)', r.text)
+                    if m:
+                        return m.group(1)
+            except:
+                pass
+        
         return ""
 
     def _load_templates(self):

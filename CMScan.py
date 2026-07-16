@@ -1847,13 +1847,11 @@ def detect_wordpress_score(base, home_html=None, home_headers=None):
     external_found = 0
 
     if home_html:
-        signals = ["/wp-content/", "/wp-includes/", "wp-json"]
+        # On utilise re.finditer car les patterns sont des regex
+        signals = [r'/content/', r'/wp-content/', r'/wp-includes/', r'wp-json', r'/app/']
         for sig in signals:
-            pos = 0
-            while True:
-                idx = home_html.lower().find(sig, pos)
-                if idx == -1:
-                    break
+            for match in re.finditer(sig, home_html, re.I):
+                idx = match.start()
                 start = max(0, idx - 80)
                 end = min(len(home_html), idx + len(sig) + 80)
                 context = home_html[start:end]
@@ -1875,7 +1873,6 @@ def detect_wordpress_score(base, home_html=None, home_headers=None):
                     internal_found += 1
                     if VERBOSE:
                         print(f"[VERBOSE]       ✓ Occurrence de '{sig}' → pas d'URL, considérée interne")
-                pos = idx + len(sig)
 
         if VERBOSE:
             print(f"[VERBOSE]     Résultat : {internal_found} interne(s), {external_found} externe(s) ignorée(s)")
