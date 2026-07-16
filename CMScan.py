@@ -20,6 +20,7 @@ from lib.colors import ok, warn, info, err
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 VERBOSE = False
+FORCE_SCAN_ALL = False
 
 import datetime
 import os
@@ -2318,18 +2319,20 @@ def detect_opencart_score(base, home_html=None, home_headers=None):
 # ──────────────────────────────────────────────────────────────
 # 4. DÉTECTION GÉNÉRIQUE (priorité WordPress sans Playwright)
 # ──────────────────────────────────────────────────────────────
+
 def detect_cms(base):
     """
     Détecte tous les CMS présents sur la cible via scoring.
     """
+    global FORCE_SCAN_ALL
     if VERBOSE:
         print(f"[VERBOSE] detect_cms: appelée pour {base}")
 
-    # ─── UTILISER get_html AU LIEU DE get ───
+    # Récupération du HTML
     home_html = None
     home_headers = {}
     try:
-        html, headers = get_html(base, max_retries=3, timeout=8)  # <-- ICI
+        html, headers = get_html(base, max_retries=3, timeout=8)
         if html and len(html.strip()) > 100:
             home_html = html
             home_headers = headers or {}
@@ -2342,18 +2345,49 @@ def detect_cms(base):
         if VERBOSE:
             print(f"[VERBOSE] Erreur récupération page d'accueil avec get_html : {e}")
 
-    # === ARRÊT IMMÉDIAT SI PAS DE HTML ===
     if not home_html:
         if VERBOSE:
             print("[VERBOSE] Pas de HTML récupéré, aucun CMS détecté")
         return []
 
-    # ... (le reste de la fonction ne change pas)
     SEUIL = 3
     detected = []
 
-    detectors = [
-        ("wordpress", detect_wordpress_score),
+    # ═══ Détection prioritaire : WordPress ═══
+    if VERBOSE:
+        print("[VERBOSE] 🔍 Testing priority: WordPress...")
+
+    wp_result = detect_wordpress_score(base, home_html, home_headers)
+    wp_detected = wp_result and wp_result.get('score', 0) >= SEUIL
+
+    if wp_detected:
+        version = wp_result['version']
+        # Version fiable via _extract_wp_version
+        version = _extract_wp_version(base) or version
+        detected.append({
+            'cms': 'wordpress',
+            'version': version,
+            'html': home_html or "",
+            'resp_headers': home_headers or {},
+            'source': wp_result.get('source', ''),
+            'score': wp_result.get('score', 0)
+        })
+        if VERBOSE:
+            print(f"[VERBOSE] ✅ WordPress détecté (score {wp_result.get('score', 0)}, version '{version}')")
+
+        # Si --force n'est pas activé, on arrête ici
+        if not FORCE_SCAN_ALL:
+            if VERBOSE:
+                print("[VERBOSE] ℹ️  WordPress détecté, arrêt des tests des autres CMS (utilisez --force pour tout analyser)")
+            return detected
+
+    # ═══ Si WordPress non détecté ou --force activé, on teste les autres CMS ═══
+    if VERBOSE and not wp_detected:
+        print("[VERBOSE] 🔍 WordPress non détecté, test des autres CMS...")
+    elif VERBOSE and FORCE_SCAN_ALL:
+        print("[VERBOSE] 🔍 --force activé, test de tous les CMS...")
+
+    other_detectors = [
         ("drupal", detect_drupal_score),
         ("joomla", detect_joomla_score),
         ("prestashop", detect_prestashop_score),
@@ -2367,7 +2401,7 @@ def detect_cms(base):
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_to_name = {
             executor.submit(detector, base, home_html, home_headers): name
-            for name, detector in detectors
+            for name, detector in other_detectors
         }
         for future in as_completed(future_to_name):
             name = future_to_name[future]
@@ -2385,14 +2419,8 @@ def detect_cms(base):
     for name, result in results.items():
         if result['score'] >= SEUIL:
             version = result['version']
-            # Pour WordPress, on utilise _extract_wp_version comme source fiable
-            if name == "wordpress":
-                version = _extract_wp_version(base)
-                if VERBOSE:
-                    print(f"[VERBOSE] ✅ {name.capitalize()} détecté (score {result['score']}, version '{version}') via {result['source']} (scoring version was '{result['version']}')")
-            else:
-                if VERBOSE:
-                    print(f"[VERBOSE] ✅ {name.capitalize()} détecté (score {result['score']}, version '{version}') via {result['source']}")
+            if VERBOSE:
+                print(f"[VERBOSE] ✅ {name.capitalize()} détecté (score {result['score']}, version '{version}') via {result['source']}")
             detected.append({
                 'cms': name,
                 'version': version,
@@ -2401,13 +2429,8 @@ def detect_cms(base):
                 'source': result['source'],
                 'score': result['score']
             })
-    unique = {}
-    for d in detected:
-        cms = d['cms']
-        if cms not in unique or d['score'] > unique[cms]['score']:
-            unique[cms] = d
-    detected = list(unique.values())
 
+    # Retourner la liste des CMS détectés (déjà unique pour WordPress)
     if VERBOSE:
         if detected:
             print(f"[VERBOSE] CMS détectés au total : {', '.join([d['cms'] for d in detected])}")
@@ -2592,13 +2615,16 @@ def main():
     parser.add_argument("-L", metavar="TARGET", required=False, help="Target URL or file with list of URLs (e.g. sites.txt)")
     parser.add_argument("-o", "--output", help="CSV output file (ignored if -L is a file, uses auto-generated names)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode")
+    parser.add_argument("--force", action="store_true", help="Force scan all CMS even if WordPress detected")
     parser.add_argument("--update", action="store_true", help="Update vulnerability databases")
     args = parser.parse_args()
 
     global VERBOSE
     if args.verbose:
         VERBOSE = True
-
+    if args.force:
+        global FORCE_SCAN_ALL
+        FORCE_SCAN_ALL = True
     import lib.http
     import random
     lib.http.FIXED_UA = random.choice(lib.http.USER_AGENTS)
