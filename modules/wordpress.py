@@ -609,27 +609,24 @@ class WordPressModule(BaseModule):
         for path in base_paths:
             url = self.base + path
             
-            # ═══ LOG AVANT LA REQUÊTE ═══
             if VERBOSE:
                 print(f"[VERBOSE]   Trying {url}")
             
             try:
                 r = requests.get(url, headers=headers, timeout=5, verify=False, allow_redirects=True)
                 
-                # ═══ LOG APRÈS LA REQUÊTE ═══
                 if VERBOSE:
                     print(f"[VERBOSE]   Status code: {r.status_code}")
                 
                 if r.status_code == 200:
-                    # ═══ AFFICHAGE DES 10 PREMIÈRES LIGNES ═══
                     if VERBOSE:
                         lines = r.text.splitlines()[:10]
                         print("[VERBOSE]   style.css first 10 lines:")
                         for line in lines:
                             print(f"[VERBOSE]     {line[:80]}")
                     
-                    # ═══ RECHERCHE DE LA VERSION ═══
-                    m = re.search(r'(?m)^\s*\*\s*Version:\s*([\d.]+(?:-alpha|-beta|-rc)?)', r.text, re.I)
+                    # CORRIGÉ : capture "Version: X.X.X" avec ou sans * avant
+                    m = re.search(r'(?m)^\s*(?:\*\s*)?Version:\s*([\d.]+(?:-alpha|-beta|-rc)?)', r.text, re.I)
                     if m:
                         if VERBOSE:
                             print(f"[VERBOSE]   ✅ Found version: {m.group(1)}")
@@ -645,7 +642,7 @@ class WordPressModule(BaseModule):
         if VERBOSE:
             print(f"[VERBOSE]   ❌ No version found for {slug} in any path")
         return ""
-               
+       
     def _wp_fetch_version_txt(self, slug):
         """
         Tente d'extraire la version depuis readme.txt sur plusieurs chemins.
