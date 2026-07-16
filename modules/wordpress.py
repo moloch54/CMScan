@@ -6,15 +6,19 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from lib.colors import C, sev_color, sev_label, ok, warn, section, print_vuln
 from lib.version import version_le, version_ge, parse_version
-from lib.http import get, _cmseek_getsource
+from lib.http import get, _cmseek_getsource, USER_AGENTS
 from lib.paths import check_paths, WP_SENSITIVE_PATHS
 from lib.vuln import check_vulns_friendsofphp
 from modules.base import BaseModule, Vuln
 import urllib.request
 import time
 import lib.http
-VERBOSE = False
-
+import sys
+try:
+    VERBOSE = sys.modules['__main__'].VERBOSE
+except (KeyError, AttributeError):
+    VERBOSE = False
+    
 class WordPressModule(BaseModule):
     def __init__(self, base_url, cms_info):
         super().__init__(base_url, cms_info)
@@ -165,27 +169,41 @@ class WordPressModule(BaseModule):
         theme_slugs = self._wp_slugs_from_html(html, "theme")
         theme_versions = {}
         
-        # 1. Détection passive depuis l'URL (?ver=)
+        # 1. Détection passive depuis l'URL (?ver=) - pour identifier les slugs
         pattern = r'<link[^>]+href=["\']([^"\']*/(?:wp-)?content/themes/([^/]+)/style\.css[^"\']*)["\']'
         matches = re.findall(pattern, html, re.I)
         for full_url, slug in matches:
             if slug not in theme_slugs:
                 theme_slugs.append(slug)
-            ver_match = re.search(r'[?&]ver=([\d.]+(?:-alpha|-beta|-rc)?)', full_url, re.I)
-            if ver_match:
-                version = ver_match.group(1)
-                theme_versions[slug] = version
-                if VERBOSE:
-                    print(f"[VERBOSE] Theme version from style.css URL: {slug} {version}")
+            if VERBOSE:
+                print(f"[VERBOSE] Theme detected from URL: {slug} ({full_url[:80]}...)")
         
-        # 2. Pour ceux qui n'ont pas de version, on cherche readme.txt (prioritaire)
+        # 2. ═══ PRIORITÉ : extraire la version depuis le fichier style.css ═══
+        # On utilise _wp_fetch_theme_version qui lit le contenu du fichier
         for slug in theme_slugs:
-            if slug not in theme_versions or not theme_versions[slug]:
-                ver = self._wp_fetch_theme_version(slug)  # readme.txt d'abord
-                if ver:
-                    theme_versions[slug] = ver
-                    if VERBOSE:
-                        print(f"[VERBOSE] Theme version from readme/style: {slug} {ver}")
+            if VERBOSE:
+                print(f"[VERBOSE] Fetching theme version for {slug}...")
+            ver = self._wp_fetch_theme_version(slug)
+            if ver:
+                theme_versions[slug] = ver
+                if VERBOSE:
+                    print(f"[VERBOSE] Theme version from style.css: {slug} {ver}")
+            else:
+                # 3. Fallback : version depuis l'URL (?ver=) si aucune autre source
+                for full_url, s in matches:
+                    if s == slug:
+                        ver_match = re.search(r'[?&]ver=([\d.]+(?:-alpha|-beta|-rc)?)', full_url, re.I)
+                        if ver_match:
+                            version = ver_match.group(1)
+                            # On vérifie que ce n'est pas une version de core
+                            if not version.startswith(('7.', '6.', '5.', '4.', '3.', '2.', '1.')):
+                                theme_versions[slug] = version
+                                if VERBOSE:
+                                    print(f"[VERBOSE] Theme version from URL fallback: {slug} {version}")
+                            else:
+                                if VERBOSE:
+                                    print(f"[VERBOSE] Theme version from URL ignored (looks like core version): {slug} {version}")
+                        break
         
         section("Themes")
         if not theme_slugs:
@@ -199,7 +217,6 @@ class WordPressModule(BaseModule):
                     v.package = f"theme:{slug}"
                     self.result.vulns.append(v)
                     print_vuln(v)
-
     def _plugins_scan(self):
         html = self.html
         plugin_slugs = self._wp_slugs_from_html(html, "plugin")
@@ -576,56 +593,59 @@ class WordPressModule(BaseModule):
 
     def _wp_fetch_theme_version(self, slug):
         """
-        Tente d'extraire la version du thème :
-        1. readme.txt / README.txt (prioritaire)
-        2. style.css (fallback)
+        Tente d'extraire la version du thème depuis style.css.
         Essaie /wp-content/themes/, /content/themes/, /app/themes/.
         """
-        # 1. PRIORITAIRE : readme.txt / README.txt
-        readme_paths = [
-            f"/wp-content/themes/{slug}/readme.txt",
-            f"/content/themes/{slug}/readme.txt",
-            f"/app/themes/{slug}/readme.txt",
-            f"/wp-content/themes/{slug}/README.txt",
-            f"/content/themes/{slug}/README.txt",
-            f"/app/themes/{slug}/README.txt",
-        ]
-        
-        for path in readme_paths:
-            url = self.base + path
-            try:
-                r = get(url, timeout=3)
-                if r and r.status_code == 200:
-                    m = re.search(r'Stable tag:\s*([\d.]+(?:-alpha|-beta|-rc)?)', r.text, re.I)
-                    if m and m.group(1).lower() != "trunk":
-                        return m.group(1)
-                    m = re.search(r'(?m)^Version:\s*([\d.]+(?:-alpha|-beta|-rc)?)', r.text)
-                    if m:
-                        return m.group(1)
-            except:
-                pass
-        
-        # 2. FALLBACK : style.css
-        css_paths = [
+        base_paths = [
             f"/wp-content/themes/{slug}/style.css",
             f"/content/themes/{slug}/style.css",
             f"/app/themes/{slug}/style.css",
         ]
         
-        for path in css_paths:
+        import requests
+        ua = random.choice(USER_AGENTS)
+        headers = {'User-Agent': ua}
+        
+        for path in base_paths:
             url = self.base + path
+            
+            # ═══ LOG AVANT LA REQUÊTE ═══
+            if VERBOSE:
+                print(f"[VERBOSE]   Trying {url}")
+            
             try:
-                r = get(url, timeout=3)
-                if r and r.status_code == 200:
-                    # Cherche "Version: X.X.X" dans le style.css
-                    m = re.search(r'(?m)^Version:\s*([\d.]+(?:-alpha|-beta|-rc)?)', r.text, re.I)
+                r = requests.get(url, headers=headers, timeout=5, verify=False, allow_redirects=True)
+                
+                # ═══ LOG APRÈS LA REQUÊTE ═══
+                if VERBOSE:
+                    print(f"[VERBOSE]   Status code: {r.status_code}")
+                
+                if r.status_code == 200:
+                    # ═══ AFFICHAGE DES 10 PREMIÈRES LIGNES ═══
+                    if VERBOSE:
+                        lines = r.text.splitlines()[:10]
+                        print("[VERBOSE]   style.css first 10 lines:")
+                        for line in lines:
+                            print(f"[VERBOSE]     {line[:80]}")
+                    
+                    # ═══ RECHERCHE DE LA VERSION ═══
+                    m = re.search(r'(?m)^\s*\*\s*Version:\s*([\d.]+(?:-alpha|-beta|-rc)?)', r.text, re.I)
                     if m:
+                        if VERBOSE:
+                            print(f"[VERBOSE]   ✅ Found version: {m.group(1)}")
                         return m.group(1)
-            except:
+                    else:
+                        if VERBOSE:
+                            print("[VERBOSE]   ❌ Version: not found in style.css")
+            except Exception as e:
+                if VERBOSE:
+                    print(f"[VERBOSE]   ❌ Error: {e}")
                 pass
         
+        if VERBOSE:
+            print(f"[VERBOSE]   ❌ No version found for {slug} in any path")
         return ""
-
+               
     def _wp_fetch_version_txt(self, slug):
         """
         Tente d'extraire la version depuis readme.txt sur plusieurs chemins.

@@ -37,14 +37,15 @@ WP_SENSITIVE_PATHS = [
     ("/wp-json/wp/v2/users",                "User enumeration via REST API",             "MEDIUM"),
     ("/wp-login.php",                       "wp-login.php exposed (brute-force target)", "MEDIUM"),
     ("/wp-cron.php",                        "wp-cron.php publicly accessible",           "MEDIUM"),
-    ("/wp-content/plugins/",               "plugins/ directory listing",                "MEDIUM"),
-    ("/wp-content/themes/",                "themes/ directory listing",                 "MEDIUM"),
+    ("/wp-content/plugins/",                "plugins/ directory listing",                "MEDIUM"),
+    ("/wp-content/themes/",                 "themes/ directory listing",                 "MEDIUM"),
     ("/.htaccess",                          ".htaccess exposed",                         "MEDIUM"),
     ("/wp-admin/admin-ajax.php",            "admin-ajax.php exposed",                    "MEDIUM"),
     ("/readme.html",                        "Version disclosure via readme.html",        "LOW"),
     ("/license.txt",                        "license.txt exposed",                       "LOW"),
     ("/wp-mail.php",                        "wp-mail.php accessible",                    "LOW"),
     ("/wp-trackback.php",                   "wp-trackback.php accessible",               "LOW"),
+    ("/wp-content/backup-db/",              "Backup directory exposed (potential database dumps)", "MEDIUM"),  # <--- NOUVEAU
 ]
 
 DRUPAL_SENSITIVE_PATHS = [
@@ -218,6 +219,9 @@ _PATH_SIGNATURES = {
 def check_paths(base, path_list, home_content=None):
     findings = []
     lock = threading.Lock()
+    
+    # Utiliser requests directement
+    import requests
 
     def is_error_page(content):
         patterns = [
@@ -227,6 +231,92 @@ def check_paths(base, path_list, home_content=None):
             "500 Internal Server Error", "Internal Server Error"
         ]
         return any(p in content for p in patterns)
+
+    def check_one(entry):
+        path, desc, sev = entry
+        url = base + path
+        if VERBOSE:
+            print(f"[VERBOSE]   Path test: {url}")
+        
+        ua = random.choice(USER_AGENTS)
+        headers = {'User-Agent': ua}
+        try:
+            r = requests.get(url, headers=headers, timeout=5, verify=False, allow_redirects=True)
+            status = r.status_code
+            content = r.text
+        except Exception as e:
+            if VERBOSE:
+                print(f"[VERBOSE]     → {url} : erreur {e}")
+            return None
+
+        if status != 200:
+            if VERBOSE:
+                print(f"[VERBOSE]     → {url} : code {status}")
+            return None
+
+        if len(content.strip()) < 20:
+            if VERBOSE:
+                print(f"[VERBOSE]     → {url} : contenu trop court ({len(content.strip())})")
+            return None
+
+        if is_error_page(content):
+            if VERBOSE:
+                print(f"[VERBOSE]     → {url} : page d'erreur (403/404/500) ignorée")
+            return None
+
+        if home_content and len(content) > 100 and content == home_content:
+            if VERBOSE:
+                print(f"[VERBOSE]     → {url} : redirige vers page d'accueil (identique) ignoré")
+            return None
+        if home_content and len(content) > 100 and len(home_content) > 100:
+            if content[:200] == home_content[:200]:
+                if VERBOSE:
+                    print(f"[VERBOSE]     → {url} : redirige vers page d'accueil (similaire) ignoré")
+                return None
+
+        sig = _PATH_SIGNATURES.get(path)
+        if sig is None:
+            pass
+        elif hasattr(sig, "search"):
+            if not sig.search(content):
+                if VERBOSE:
+                    print(f"[VERBOSE]     → {url} : signature non trouvée, ignoré")
+                return None
+        elif isinstance(sig, list):
+            if not any(kw in content for kw in sig):
+                if VERBOSE:
+                    print(f"[VERBOSE]     → {url} : signature non trouvée (liste), ignoré")
+                return None
+        else:
+            if sig not in content:
+                if VERBOSE:
+                    print(f"[VERBOSE]     → {url} : signature '{sig}' non trouvée, ignoré")
+                return None
+
+        if VERBOSE:
+            print(f"[VERBOSE]     → {url} : OK (exposé)")
+
+        with lock:
+            findings.append({
+                "path": path,
+                "url": url,
+                "description": desc,
+                "severity": sev,
+                "status": 200
+            })
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {executor.submit(check_one, entry): entry for entry in path_list}
+        for future in as_completed(futures):
+            try:
+                future.result(timeout=8)
+            except Exception:
+                pass
+
+    sev_ord = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+    findings.sort(key=lambda x: sev_ord.get(x["severity"], 4))
+    return findings
 
     def check_one(entry):
         path, desc, sev = entry
