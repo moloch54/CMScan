@@ -168,6 +168,16 @@ class WordPressModule(BaseModule):
         html = self.html
         plugin_slugs = self._wp_slugs_from_html(html, "plugin")
         
+        # ═══ RÉCUPÉRER LES PLUGINS DEPUIS LE LISTING DE RÉPERTOIRE ═══
+        listing_slugs = self._fetch_plugins_from_directory_listing()
+        if listing_slugs:
+            for slug in listing_slugs:
+                if slug not in plugin_slugs:
+                    plugin_slugs.append(slug)
+                    if VERBOSE:
+                        print(f"[VERBOSE] Plugin detected from directory listing: {slug}")
+        
+        # ... le reste de la fonction ...
         # ═══ Détection passive des plugins depuis le HTML ═══
         # Meta tags (ex: google-site-kit)
         meta_matches = re.findall(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
@@ -661,6 +671,35 @@ class WordPressModule(BaseModule):
             if re.match(r'\d+\.\d+(\.\d+)?', version):
                 return version
         return ""
+
+    def _fetch_plugins_from_directory_listing(self):
+        """
+        Récupère les slugs des plugins depuis le listing de répertoire /wp-content/plugins/ si accessible.
+        """
+        paths = [
+            "/wp-content/plugins/",
+            "/content/plugins/",
+            "/app/plugins/",
+        ]
+        for path in paths:
+            url = self.base + path
+            try:
+                r = get(url, timeout=5)
+                if r and r.status_code == 200:
+                    # Vérifier que c'est un listing de répertoire
+                    if 'Index of' not in r.text:
+                        continue
+                    # Extraire tous les noms de dossiers (contenus entre <a href="...">...</a>)
+                    # Les noms de dossiers finissent par /
+                    matches = re.findall(r'<a href="([^/]+)/"', r.text)
+                    if matches:
+                        if VERBOSE:
+                            print(f"[VERBOSE] Found {len(matches)} plugins from directory listing at {path}")
+                        return matches
+            except:
+                pass
+        return []
+        
 
     def _wp_slugs_from_html(self, html, kind):
         slugs = []
