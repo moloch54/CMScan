@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 VERBOSE = False
 FORCE_SCAN_ALL = False
-
+STEALTH_MODE = False
 import datetime
 import os
 import requests
@@ -2528,6 +2528,7 @@ def scan(target, csv_out):
         if cms == "wordpress":
             from modules.wordpress import WordPressModule
             module = WordPressModule(base, cms_info)
+            module.stealth = STEALTH_MODE
             result = module.scan()
         elif cms == "drupal":
             from modules.drupal import DrupalModule
@@ -2643,6 +2644,7 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode")
     parser.add_argument("--force", action="store_true", help="Force scan all CMS even if WordPress detected")
     parser.add_argument("--update", action="store_true", help="Update vulnerability databases")
+    parser.add_argument("--stealth", action="store_true", help="Stealth mode: disable exposed paths scan (fewer requests)")
     args = parser.parse_args()
 
     global VERBOSE
@@ -2651,6 +2653,10 @@ def main():
     if args.force:
         global FORCE_SCAN_ALL
         FORCE_SCAN_ALL = True
+    if args.stealth:
+        global STEALTH_MODE
+        STEALTH_MODE = True
+
     import lib.http
     import random
     lib.http.FIXED_UA = random.choice(lib.http.USER_AGENTS)

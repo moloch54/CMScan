@@ -16,6 +16,7 @@ USER_AGENTS = [
 ]
 
 WP_SENSITIVE_PATHS = [
+    # CRITICAL
     ("/wp-config.php.bak",                  "wp-config backup exposed",                  "CRITICAL"),
     ("/wp-config.php~",                     "wp-config backup exposed",                  "CRITICAL"),
     ("/wp-config.php.old",                  "wp-config backup exposed",                  "CRITICAL"),
@@ -23,31 +24,55 @@ WP_SENSITIVE_PATHS = [
     ("/.git/config",                        "Git repo exposed",                          "CRITICAL"),
     ("/.env",                               ".env file exposed",                         "CRITICAL"),
     ("/wp-content/debug.log",               "debug.log exposed — may contain creds",     "CRITICAL"),
+    ("/content/debug.log",                  "debug.log exposed — may contain creds",     "CRITICAL"),
+    ("/app/debug.log",                      "debug.log exposed — may contain creds",     "CRITICAL"),
+    ("/wp-content/uploads/phpinfo.php",     "phpinfo.php in uploads",                    "CRITICAL"),
+    ("/content/uploads/phpinfo.php",        "phpinfo.php in uploads",                    "CRITICAL"),
+    ("/app/uploads/phpinfo.php",            "phpinfo.php in uploads",                    "CRITICAL"),
+    
+    # HIGH
     ("/wp-content/uploads/error_log",       "PHP error_log exposed",                     "HIGH"),
+    ("/content/uploads/error_log",          "PHP error_log exposed",                     "HIGH"),
+    ("/app/uploads/error_log",              "PHP error_log exposed",                     "HIGH"),
     ("/xmlrpc.php",                         "xmlrpc.php accessible (brute/DoS/SSRF)",    "HIGH"),
     ("/wp-includes/",                       "wp-includes/ directory listing",            "HIGH"),
     ("/wp-content/",                        "wp-content/ directory listing",             "HIGH"),
+    ("/content/",                           "content/ directory listing",                "HIGH"),
+    ("/app/",                               "app/ directory listing",                    "HIGH"),
     ("/wp-admin/install.php",               "install.php accessible — reinstall risk",   "HIGH"),
     ("/wp-admin/setup-config.php",          "setup-config.php accessible",               "HIGH"),
     ("/wp-content/uploads/.htaccess",       ".htaccess missing in uploads (PHP exec)",   "HIGH"),
-    ("/wp-content/uploads/phpinfo.php",     "phpinfo.php in uploads",                    "CRITICAL"),
+    ("/content/uploads/.htaccess",          ".htaccess missing in uploads (PHP exec)",   "HIGH"),
+    ("/app/uploads/.htaccess",              ".htaccess missing in uploads (PHP exec)",   "HIGH"),
     ("/php.ini",                            "php.ini exposed",                           "HIGH"),
     ("/error_log",                          "error_log exposed in webroot",              "HIGH"),
+    
+    # MEDIUM
     ("/wp-admin/",                          "wp-admin accessible",                       "MEDIUM"),
     ("/wp-json/wp/v2/users",                "User enumeration via REST API",             "MEDIUM"),
     ("/wp-login.php",                       "wp-login.php exposed (brute-force target)", "MEDIUM"),
     ("/wp-cron.php",                        "wp-cron.php publicly accessible",           "MEDIUM"),
     ("/wp-content/plugins/",                "plugins/ directory listing",                "MEDIUM"),
+    ("/content/plugins/",                   "plugins/ directory listing (content)",      "MEDIUM"),
+    ("/app/plugins/",                       "plugins/ directory listing (app)",          "MEDIUM"),
     ("/wp-content/themes/",                 "themes/ directory listing",                 "MEDIUM"),
+    ("/content/themes/",                    "themes/ directory listing (content)",       "MEDIUM"),
+    ("/app/themes/",                        "themes/ directory listing (app)",           "MEDIUM"),
+    ("/wp-content/uploads/",                "Uploads directory listing",                 "MEDIUM"),
+    ("/content/uploads/",                   "Uploads directory listing (content)",       "MEDIUM"),
+    ("/app/uploads/",                       "Uploads directory listing (app)",           "MEDIUM"),
     ("/.htaccess",                          ".htaccess exposed",                         "MEDIUM"),
     ("/wp-admin/admin-ajax.php",            "admin-ajax.php exposed",                    "MEDIUM"),
+    ("/wp-content/backup-db/",              "Backup directory exposed (potential database dumps)", "MEDIUM"),
+    ("/content/backup-db/",                 "Backup directory exposed (content)",        "MEDIUM"),
+    ("/app/backup-db/",                     "Backup directory exposed (app)",            "MEDIUM"),
+    
+    # LOW
     ("/readme.html",                        "Version disclosure via readme.html",        "LOW"),
     ("/license.txt",                        "license.txt exposed",                       "LOW"),
     ("/wp-mail.php",                        "wp-mail.php accessible",                    "LOW"),
     ("/wp-trackback.php",                   "wp-trackback.php accessible",               "LOW"),
-    ("/wp-content/backup-db/",              "Backup directory exposed (potential database dumps)", "MEDIUM"),  # <--- NOUVEAU
 ]
-
 DRUPAL_SENSITIVE_PATHS = [
     ("/CHANGELOG.txt",                   "Version disclosure",              "MEDIUM"),
     ("/core/CHANGELOG.txt",              "Version disclosure (core)",       "MEDIUM"),

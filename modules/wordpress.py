@@ -32,7 +32,8 @@ class WordPressModule(BaseModule):
 
     def scan(self):
  
-        self._paths_scan()
+        if not getattr(self, 'stealth', False):
+            self._paths_scan()
         self._core_scan()
         self._themes_scan()
         self._plugins_scan()
