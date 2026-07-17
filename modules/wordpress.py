@@ -164,6 +164,179 @@ class WordPressModule(BaseModule):
         else:
             warn("Core version not detected")
 
+    def _plugins_scan(self):
+        html = self.html
+        plugin_slugs = self._wp_slugs_from_html(html, "plugin")
+        
+        # ═══ Détection passive des plugins depuis le HTML ═══
+        # Meta tags (ex: google-site-kit)
+        meta_matches = re.findall(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+        for meta in meta_matches:
+            m = re.search(r'Site Kit by Google\s+([\d.]+)', meta, re.I)
+            if m:
+                if 'google-site-kit' not in plugin_slugs:
+                    plugin_slugs.append('google-site-kit')
+                self._plugin_versions_from_meta['google-site-kit'] = m.group(1)
+                if VERBOSE:
+                    print(f"[VERBOSE] Plugin detected from meta: google-site-kit {m.group(1)}")
+        
+        # ═══ Détection générique des plugins dans les commentaires ═══
+        comment_plugin_patterns = [
+            (r'Stream WordPress user activity plugin v([\d.]+)', 'stream'),
+            (r'Yoast SEO Premium plugin v([\d.]+)', 'wordpress-seo-premium'),
+            (r'All in One SEO Pack\s+([\d.]+)', 'all-in-one-seo-pack'),
+            (r'<!--[^>]*WP Rocket[^>]*-->', 'wp-rocket'),
+        ]
+        
+        for pattern, slug in comment_plugin_patterns:
+            matches = re.findall(pattern, html, re.I)
+            if matches:
+                version = matches[0]
+                if slug not in plugin_slugs:
+                    plugin_slugs.append(slug)
+                self._plugin_versions_from_comment[slug] = version
+                if VERBOSE:
+                    print(f"[VERBOSE] Plugin detected from comment: {slug} {version}")
+        
+        # Commentaires (ex: wordpress-seo)
+        comment_matches = re.findall(r'<!--[^>]*optimized with the Yoast SEO plugin v([\d.]+)[^>]*-->', html, re.I)
+        if comment_matches:
+            version = comment_matches[0]
+            if 'wordpress-seo' not in plugin_slugs:
+                plugin_slugs.append('wordpress-seo')
+            self._plugin_versions_from_comment['wordpress-seo'] = version
+            if VERBOSE:
+                print(f"[VERBOSE] Plugin detected from comment: wordpress-seo {version}")
+        
+        templates = self._load_templates()
+        for tpl in templates:
+            regex = tpl[0].rstrip("\n")
+            tname = tpl[2].rstrip("\n") if len(tpl) > 2 else None
+            for name, ver in self._extract_with_template(html, regex, "1", tname):
+                if name and name not in plugin_slugs:
+                    plugin_slugs.append(name)
+        
+        spiders = self._load_spiders()
+        for sp in spiders:
+            if len(sp) < 3: continue
+            name = sp[0].rstrip("\n")
+            url = self.base + sp[1].rstrip("\n")
+            regex = sp[2].rstrip("\n")
+            try:
+                r = get(url)
+                if r and r.status_code == 200:
+                    m = re.search(regex, r.text)
+                    if m:
+                        ver = m.group(1)
+                        if name not in plugin_slugs:
+                            plugin_slugs.append(name)
+            except: pass
+        
+        plugin_slugs = sorted(set(plugin_slugs))
+        
+        # ═══ ORDRE DE PRIORITÉ ═══
+        # 1. readme.txt (PRIORITÉ ABSOLUE, sans filtre)
+        # 2. .pot (Project-Id-Version)
+        # 3. Meta tag / commentaire
+        # 4. ?ver= (dernier fallback, filtré)
+        
+        plugin_versions = {}
+        
+        # ═══ 1. readme.txt (PRIORITÉ MAXIMALE - SANS FILTRE) ═══
+        if VERBOSE:
+            print("[VERBOSE] Fetching readme.txt for plugins (PRIORITY 1)...")
+        
+        slugs_to_fetch = plugin_slugs.copy()
+        
+        def fetch_version(slug):
+            try:
+                ver = self._wp_fetch_version_txt(slug)
+                return (slug, ver)  # toujours un tuple
+            except Exception as e:
+                if VERBOSE:
+                    print(f"[VERBOSE] Error fetching readme for {slug}: {e}")
+                return (slug, None)
+        
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {executor.submit(fetch_version, slug): slug for slug in slugs_to_fetch}
+            for future in as_completed(futures):
+                result = future.result()
+                if result is None:
+                    continue
+                slug, ver = result
+                if ver:
+                    plugin_versions[slug] = ver
+        # ═══ 1.5. Imports ES modules (ex: workbox-v7.3.0) ═══
+        if VERBOSE:
+            print("[VERBOSE] Checking ES module imports for plugin versions (PRIORITY 1.5)...")
+            print(f"[VERBOSE] plugin_slugs: {plugin_slugs}")  # <-- DEBUG
+        for slug in plugin_slugs:
+            if slug in plugin_versions:
+                continue
+            ver = self._wp_ver_from_imports(html, slug)
+            if ver:
+                plugin_versions[slug] = ver
+                if VERBOSE:
+                    print(f"[VERBOSE] Plugin version from ES module import: {slug} {ver}")
+
+        # ═══ 2. .pot (FILTRE : doit contenir un point) ═══
+        if VERBOSE:
+            print("[VERBOSE] Checking .pot files for remaining plugins (PRIORITY 2)...")
+        for slug in plugin_slugs:
+            if slug in plugin_versions:
+                continue
+            ver = self._wp_fetch_version_from_pot(slug)
+            if ver and '.' in ver:
+                plugin_versions[slug] = ver
+                if VERBOSE:
+                    print(f"[VERBOSE] Plugin version from .pot: {slug} {ver}")
+        
+        # ═══ 3. Meta tag / commentaire (FILTRE : doit contenir un point) ═══
+        for slug in plugin_slugs:
+            if slug in plugin_versions:
+                continue
+            if slug in self._plugin_versions_from_meta:
+                ver = self._plugin_versions_from_meta[slug]
+                if '.' in ver:
+                    plugin_versions[slug] = ver
+                continue
+            if slug in self._plugin_versions_from_comment:
+                ver = self._plugin_versions_from_comment[slug]
+                if '.' in ver:
+                    plugin_versions[slug] = ver
+                continue
+        
+        # ═══ 4. ?ver= (DERNIER FALLBACK - AUCUN FILTRE) ═══
+        for slug in plugin_slugs:
+            if slug in plugin_versions:
+                continue
+            ver = self._wp_ver_from_html(html, slug, "plugin", self.version)
+            if ver:
+                plugin_versions[slug] = ver
+                if VERBOSE:
+                    print(f"[VERBOSE] Plugin version from ?ver= fallback: {slug} {ver}")
+        
+        # Détection spécifique de wp-rocket (déjà géré par readme/.pot, mais on garde)
+        if 'wp-rocket' in plugin_slugs:
+            rocket_ver = self._get_wp_rocket_version()
+            if rocket_ver:
+                plugin_versions['wp-rocket'] = rocket_ver
+                if VERBOSE:
+                    print(f"[VERBOSE] wp-rocket version: {rocket_ver}")
+        
+        section("Plugins")
+        if not plugin_slugs:
+            warn("No plugins detected")
+        for slug in plugin_slugs:
+            ver = plugin_versions.get(slug, "")
+            print(f"  {C.WHITE}{C.BOLD}{slug}{C.RST}  {C.DIM}{ver or '?'}{C.RST}")
+            if ver:
+                vulns = self._wp_vuln_from_file(self._ensure_wp_vuln(slug, "plugin"), ver)
+                for v in vulns:
+                    v.package = f"plugin:{slug}"
+                    self.result.vulns.append(v)
+                    print_vuln(v)
+
     def _themes_scan(self):
         html = self.html
         theme_slugs = self._wp_slugs_from_html(html, "theme")
@@ -217,138 +390,30 @@ class WordPressModule(BaseModule):
                     v.package = f"theme:{slug}"
                     self.result.vulns.append(v)
                     print_vuln(v)
-    def _plugins_scan(self):
-        html = self.html
-        plugin_slugs = self._wp_slugs_from_html(html, "plugin")
-        
-        # ═══ Détection passive des plugins depuis le HTML ═══
-        # Meta tags (ex: google-site-kit)
-        meta_matches = re.findall(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
-        for meta in meta_matches:
-            m = re.search(r'Site Kit by Google\s+([\d.]+)', meta, re.I)
-            if m:
-                if 'google-site-kit' not in plugin_slugs:
-                    plugin_slugs.append('google-site-kit')
-                self._plugin_versions_from_meta['google-site-kit'] = m.group(1)
-                if VERBOSE:
-                    print(f"[VERBOSE] Plugin detected from meta: google-site-kit {m.group(1)}")
-        # ═══ Détection générique des plugins dans les commentaires ═══
-        # Exemple: "Stream WordPress user activity plugin v4.2.2"
-        # ═══ Détection générique des plugins dans les commentaires ═══
-        # Exemple: "Stream WordPress user activity plugin v4.2.2"
-        comment_plugin_patterns = [
-            (r'Stream WordPress user activity plugin v([\d.]+)', 'stream'),
-            (r'Yoast SEO Premium plugin v([\d.]+)', 'wordpress-seo-premium'),
-            (r'All in One SEO Pack\s+([\d.]+)', 'all-in-one-seo-pack'),
-            (r'<!--[^>]*WP Rocket[^>]*-->', 'wp-rocket'),  # <--- MODIFIÉ
+    def _wp_fetch_version_from_pot(self, slug):
+        """
+        Extrait la version depuis le fichier .pot du plugin.
+        Exemple: fusion-builder/languages/fusion-builder.pot
+        """
+        pot_paths = [
+            f"/wp-content/plugins/{slug}/languages/{slug}.pot",
+            f"/content/plugins/{slug}/languages/{slug}.pot",
+            f"/app/plugins/{slug}/languages/{slug}.pot",
         ]
         
-        for pattern, slug in comment_plugin_patterns:
-            matches = re.findall(pattern, html, re.I)
-            if matches:
-                version = matches[0]
-                if slug not in plugin_slugs:
-                    plugin_slugs.append(slug)
-                self._plugin_versions_from_comment[slug] = version
-                if VERBOSE:
-                    print(f"[VERBOSE] Plugin detected from comment: {slug} {version}")
-        
-        # Commentaires (ex: wordpress-seo)
-        comment_matches = re.findall(r'<!--[^>]*optimized with the Yoast SEO plugin v([\d.]+)[^>]*-->', html, re.I)
-        if comment_matches:
-            version = comment_matches[0]
-            if 'wordpress-seo' not in plugin_slugs:
-                plugin_slugs.append('wordpress-seo')
-            self._plugin_versions_from_comment['wordpress-seo'] = version
-            if VERBOSE:
-                print(f"[VERBOSE] Plugin detected from comment: wordpress-seo {version}")
-        
-        templates = self._load_templates()
-        for tpl in templates:
-            regex = tpl[0].rstrip("\n")
-            tname = tpl[2].rstrip("\n") if len(tpl) > 2 else None
-            for name, ver in self._extract_with_template(html, regex, "1", tname):
-                if name and name not in plugin_slugs:
-                    plugin_slugs.append(name)
-        
-        spiders = self._load_spiders()
-        for sp in spiders:
-            if len(sp) < 3: continue
-            name = sp[0].rstrip("\n")
-            url = self.base + sp[1].rstrip("\n")
-            regex = sp[2].rstrip("\n")
+        for path in pot_paths:
+            url = self.base + path
             try:
-                r = get(url)
+                r = get(url, timeout=3)
                 if r and r.status_code == 200:
-                    m = re.search(regex, r.text)
+                    m = re.search(r'Project-Id-Version:\s*[^\d]*([\d.]+)', r.text, re.I)
                     if m:
-                        ver = m.group(1)
-                        if name not in plugin_slugs:
-                            plugin_slugs.append(name)
-            except: pass
+                        return m.group(1)
+            except:
+                pass
         
-        plugin_slugs = sorted(set(plugin_slugs))
-        
-        # ═══ PRIORITÉ : readme.txt en premier pour TOUS les plugins ═══
-        plugin_versions = {}
-        slugs_to_fetch = plugin_slugs.copy()
-        
-        if slugs_to_fetch:
-            if VERBOSE:
-                print(f"[VERBOSE] Fetching readme.txt for {len(slugs_to_fetch)} plugins with 2 workers (PRIORITY)...")
-            
-            def fetch_version(slug):
-                ver = self._wp_fetch_version_txt(slug)                
-                return slug, ver
-            
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                futures = {executor.submit(fetch_version, slug): slug for slug in slugs_to_fetch}
-                for future in as_completed(futures):
-                    slug, ver = future.result()
-                    if ver:
-                        plugin_versions[slug] = ver
-        
-        # ═══ FALLBACK : pour ceux qui n'ont pas de version via readme.txt ═══
-        for slug in plugin_slugs:
-            if slug in plugin_versions and plugin_versions[slug]:
-                continue  # déjà trouvé via readme.txt, on passe
-            
-            # Fallback 1 : meta tag (ex: google-site-kit)
-            if slug in self._plugin_versions_from_meta:
-                plugin_versions[slug] = self._plugin_versions_from_meta[slug]
-                continue
-            
-            # Fallback 2 : commentaire (ex: wordpress-seo)
-            if slug in self._plugin_versions_from_comment:
-                plugin_versions[slug] = self._plugin_versions_from_comment[slug]
-                continue
-            
-            # Fallback 3 : depuis les URLs ?ver= dans le HTML
-            ver = self._wp_ver_from_html(html, slug, "plugin", self.version)
-            if ver:
-                plugin_versions[slug] = ver
+        return ""
 
-        # Détection spécifique de wp-rocket
-        if 'wp-rocket' in plugin_slugs:
-            rocket_ver = self._get_wp_rocket_version()
-            if rocket_ver:
-                plugin_versions['wp-rocket'] = rocket_ver
-                if VERBOSE:
-                    print(f"[VERBOSE] wp-rocket version: {rocket_ver}")
-
-        section("Plugins")
-        if not plugin_slugs:
-            warn("No plugins detected")
-        for slug in plugin_slugs:
-            ver = plugin_versions.get(slug, "")
-            print(f"  {C.WHITE}{C.BOLD}{slug}{C.RST}  {C.DIM}{ver or '?'}{C.RST}")
-            if ver:
-                vulns = self._wp_vuln_from_file(self._ensure_wp_vuln(slug, "plugin"), ver)
-                for v in vulns:
-                    v.package = f"plugin:{slug}"
-                    self.result.vulns.append(v)
-                    print_vuln(v)
-                    
     def _authors_scan(self):
         time.sleep(3)
         section("Authors")
@@ -577,10 +642,48 @@ class WordPressModule(BaseModule):
             print(f"[DEBUG] _harvest_usernames_wp: fin, {len(usernames)} utilisateur(s)")
         return {u for u in usernames if u}
 
+    def _wp_ver_from_imports(self, html, slug):
+        """
+        Extrait la version d'un plugin depuis les imports ES modules.
+        Exemple: workbox-v7.3.0 → 7.3.0
+        """
+        # Capture les patterns comme workbox-v7.3.0 ou workbox/7.3.0
+        # Accepte les slash échappés \/ dans l'URL
+        pattern = re.compile(rf'/(?:wp-)?content/plugins/{re.escape(slug)}/(?:wp-includes/js/)?[^"\']*?[-/]v([\d.]+)[-/]', re.I)
+        matches = pattern.findall(html)
+        
+        if VERBOSE and matches:
+            print(f"[VERBOSE] ES module version matches for {slug}: {matches}")
+        
+        if matches:
+            from collections import Counter
+            version = Counter(matches).most_common(1)[0][0]
+            if re.match(r'\d+\.\d+(\.\d+)?', version):
+                return version
+        return ""
+
     def _wp_slugs_from_html(self, html, kind):
-        # Capture à la fois /wp-content/plugins/ et /content/plugins/ (et aussi /wp-content/themes/)
+        slugs = []
+        
+        # 1. Chemins classiques : /wp-content/plugins/ ou /content/plugins/
         pat = re.compile(rf'/(?:wp-)?content/{kind}s/([a-z0-9][a-z0-9_\-]+)/', re.I)
-        return sorted(set(pat.findall(html)))
+        slugs.extend(pat.findall(html))
+        
+        # 2. Slash échappés : \/wp-content\/plugins\/pwa\/
+        escaped_pattern = re.compile(rf'\\/wp-?content\\/{kind}s\\/([a-z0-9][a-z0-9_\-]+)\\/', re.I)
+        slugs.extend(escaped_pattern.findall(html))
+        
+        # 3. Imports ES modules : from "https://.../wp-content/plugins/pwa/..."
+        import_pattern = re.compile(r'from\s*["\'](?:https?:)?(?:\\/\\/)?[^"\']*/(?:wp-)?content/{kind}s/([a-z0-9][a-z0-9_\-]+)(?=/|\\/)', re.I)
+        slugs.extend(import_pattern.findall(html))
+        
+        # 4. URLs dans les scripts
+        script_pattern = re.compile(r'src=["\'](?:https?:)?(?:\\/\\/)?[^"\']*/(?:wp-)?content/{kind}s/([a-z0-9][a-z0-9_\-]+)(?=/|\\/)', re.I)
+        slugs.extend(script_pattern.findall(html))
+        
+        if VERBOSE:
+            print(f"[VERBOSE] Slugs found from {kind}s: {sorted(set(slugs))}")
+        return sorted(set(slugs))
 
     def _wp_ver_from_html(self, html, slug, kind, core_ver):
         # Capture à la fois /wp-content/plugins/ et /content/plugins/
@@ -642,12 +745,36 @@ class WordPressModule(BaseModule):
         if VERBOSE:
             print(f"[VERBOSE]   ❌ No version found for {slug} in any path")
         return ""
-       
+
+    def _wp_fetch_version_from_pot(self, slug):
+        """
+        Extrait la version depuis le fichier .pot du plugin.
+        Exemple: fusion-builder/languages/fusion-builder.pot
+        """
+        pot_paths = [
+            f"/wp-content/plugins/{slug}/languages/{slug}.pot",
+            f"/content/plugins/{slug}/languages/{slug}.pot",
+            f"/app/plugins/{slug}/languages/{slug}.pot",
+        ]
+        
+        for path in pot_paths:
+            url = self.base + path
+            try:
+                r = get(url, timeout=3)
+                if r and r.status_code == 200:
+                    m = re.search(r'Project-Id-Version:\s*[^\d]*([\d.]+)', r.text, re.I)
+                    if m:
+                        return m.group(1)
+            except:
+                pass
+        
+        return ""
+
     def _wp_fetch_version_txt(self, slug):
         """
         Tente d'extraire la version depuis readme.txt sur plusieurs chemins.
         Essaie /wp-content/plugins/, /content/plugins/, /app/plugins/.
-        Cherche Stable tag, Version, et Changelog.
+        Cherche Stable tag, Version, Changelog, et Project-Id-Version.
         """
         base_paths = [
             f"/wp-content/plugins/{slug}/readme.txt",
@@ -673,12 +800,17 @@ class WordPressModule(BaseModule):
                     if m:
                         return m.group(1)
                     
-                    # 3. Changelog (cherche "= X.X.X =" ou "Version X.X.X")
+                    # 3. Project-Id-Version (ex: "Project-Id-Version: Avada Builder 3.15.1")
+                    m = re.search(r'Project-Id-Version:\s*[^\d]*([\d.]+)', r.text, re.I)
+                    if m:
+                        return m.group(1)
+                    
+                    # 4. Changelog (cherche "= X.X.X =" ou "Version X.X.X")
                     m = re.search(r'=+\s*([\d.]+)\s*=+', r.text)
                     if m:
                         return m.group(1)
                     
-                    # 4. Cherche "Version X.X.X" dans le texte
+                    # 5. Cherche "Version X.X.X" dans le texte
                     m = re.search(r'Version\s+([\d.]+)', r.text, re.I)
                     if m:
                         return m.group(1)
@@ -686,7 +818,7 @@ class WordPressModule(BaseModule):
                 pass
         
         return ""
-        
+
     def _load_templates(self):
         templates = []
         if not os.path.isdir(self.TEMPLATES_DIR):
