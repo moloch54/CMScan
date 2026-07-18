@@ -1,10 +1,10 @@
-# CMScan
+# CMScan  
+## No API key, no limitation   
 
 ![CMScan screenshot](CMScan.png)
 
 **CMScan** is a unified security scanner for WordPress, Drupal, Joomla, PrestaShop, Shopify, Magento, TYPO3, and OpenCart websites. 
 
-**No api-key, no limitation**   
 It detects CMS versions, enumerates users, checks for known vulnerabilities, and exports the results to CSV.
 
 ## Features
