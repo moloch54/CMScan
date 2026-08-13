@@ -211,7 +211,7 @@ try:
     with open("version.txt", "r") as f:
         VERSION = f.read().strip()
 except:
-    VERSION = "3.8"
+    VERSION = "4.0.0"
 
 BANNER = f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
@@ -1107,6 +1107,22 @@ def detect_joomla_score(base, home_html=None, home_headers=None):
         if VERBOSE:
             print("[VERBOSE]     ✗ pas de headers disponibles")
 
+    # ===== TEST 9 : Occurrences du mot "joomla" dans le HTML =====
+    if home_html:
+        if VERBOSE:
+            print("[VERBOSE]   Test 9 : recherche d'occurrences 'joomla' dans le HTML")
+        count = len(re.findall(r'joomla', home_html, re.I))
+        if count > 0:
+            # On ajoute un point par occurrence, limité à 5
+            points = min(count, 5)
+            score += points
+            sources.append(f"{count} occurrences de 'joomla' (+{points} points)")
+            if VERBOSE:
+                print(f"[VERBOSE]     ✓ {count} occurrences de 'joomla' trouvées → +{points} points")
+        else:
+            if VERBOSE:
+                print("[VERBOSE]     ✗ pas de 'joomla' trouvé")
+                
     # Bonus si version trouvée
     if version:
         score += 1
@@ -1870,7 +1886,7 @@ def detect_wordpress_score(base, home_html=None, home_headers=None):
 
     if home_html:
         # On utilise re.finditer car les patterns sont des regex
-        signals = [r'/content/', r'/wp-content/', r'/wp-includes/', r'wp-json', r'/app/']
+        signals = [r'/wp-content/', r'/wp-includes/', r'wp-json']
         for sig in signals:
             for match in re.finditer(sig, home_html, re.I):
                 idx = match.start()

@@ -469,25 +469,51 @@ class WordPressModule(BaseModule):
                 cve = src.get("id", "")
                 if "CVE" not in cve:
                     continue
+
+                # --- Gestion de l'impact (cvss ou ssvc) ---
                 impact = v.get("impact", {})
                 cvss = impact.get("cvss", {})
-                sev = cvss.get("severity", "")
-                priv = cvss.get("pr", "")
+                if cvss:
+                    sev = cvss.get("severity", "")
+                    priv = cvss.get("pr", "")
+                    cvss_score = float(cvss.get("score", 0)) if cvss.get("score") else None
+                else:
+                    # Pas de cvss : on utilise les informations ssvc si disponibles
+                    ssvc = impact.get("ssvc", {})
+                    # Par défaut, on met HIGH / UNAUTHENTICATED
+                    sev = "h"
+                    priv = "n"
+                    cvss_score = None
+                    # Si on veut affiner, on peut analyser ssvc["technical_impact"] etc.
+                    # mais on garde un comportement conservateur.
+
+                # Filtrer les vulnérabilités non critiques / non authentifiées
                 if sev not in ("c", "h") or priv not in ("n", "l"):
                     continue
+
+                # --- Gestion des versions (operator) ---
                 op = v.get("operator", {})
-                min_v = op.get("min_version", "0")
-                max_v = op.get("max_version", "")
-                if min_v in ("", "null", None): min_v = "0"
-                if max_v in ("", "null", None): max_v = ""
+                if op:
+                    min_v = op.get("min_version", "0")
+                    max_v = op.get("max_version", "")
+                    if min_v in ("", "null", None): min_v = "0"
+                    if max_v in ("", "null", None): max_v = ""
+                else:
+                    # Pas d'opérateur : on considère que la vulnérabilité s'applique à la version demandée
+                    min_v = "0"
+                    max_v = "1000000"  # aucune limite supérieure
+
                 affected_ver = ""
-                if not max_v:
-                    for src in v.get("source", []):
-                        desc = src.get("description", "")
+                if not max_v or max_v == "1000000":
+                    # Essayer d'extraire la version affectée depuis la description
+                    for src_entry in v.get("source", []):
+                        desc = src_entry.get("description", "")
                         m = re.search(r"(?:<=?|through|up to)\s*([\d]+\.[\d]+\.?[\d]*)", desc, re.I)
                         if m:
                             affected_ver = m.group(1)
                             break
+
+                # Vérification que la version actuelle est affectée
                 if item_version:
                     if max_v and max_v != "1000000":
                         if not version_le(item_version, max_v):
@@ -500,7 +526,9 @@ class WordPressModule(BaseModule):
                             continue
                 else:
                     continue
+
                 display_max = max_v if max_v and max_v != "1000000" else affected_ver
+
                 results.append(Vuln(
                     id=cve,
                     name=src.get("description", "")[:120],
@@ -508,11 +536,12 @@ class WordPressModule(BaseModule):
                     link=src.get("link", ""),
                     severity=sev_label(sev),
                     privileges=priv,
-                    cvss_score=float(cvss.get("score", 0)) if cvss.get("score") else None,
+                    cvss_score=cvss_score,
                     fixed_version=display_max,
                     package=os.path.basename(path)
                 ))
-        except Exception:
+        except Exception as e:
+            # En cas d'erreur, on laisse passer (log éventuel)
             pass
 
         # 2. Récupérer les vulns FriendsOfPHP (toujours)
