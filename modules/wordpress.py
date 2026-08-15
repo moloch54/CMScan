@@ -165,6 +165,29 @@ class WordPressModule(BaseModule):
         else:
             warn("Core version not detected")
 
+
+    def _fetch_wpml_version(self, slug):
+        """Récupère la version d'un plugin WPML depuis wpml-dependencies.json"""
+        urls = [
+            f"/wp-content/plugins/sitepress-multilingual-cms/wpml-dependencies.json",
+            f"/content/plugins/sitepress-multilingual-cms/wpml-dependencies.json",
+            f"/app/plugins/sitepress-multilingual-cms/wpml-dependencies.json",
+        ]
+        for url in urls:
+            try:
+                r = get(self.base + url, timeout=3)
+                if r and r.status_code == 200:
+                    data = r.json()
+                    if slug in data:
+                        return data[slug]
+                    for key, value in data.items():
+                        if slug in key or key in slug:
+                            return value
+            except:
+                pass
+        return ""
+
+
     def _plugins_scan(self):
         html = self.html
         plugin_slugs = self._wp_slugs_from_html(html, "plugin")
@@ -178,7 +201,6 @@ class WordPressModule(BaseModule):
                     if VERBOSE:
                         print(f"[VERBOSE] Plugin detected from directory listing: {slug}")
         
-        # ... le reste de la fonction ...
         # ═══ Détection passive des plugins depuis le HTML ═══
         # Meta tags (ex: google-site-kit)
         meta_matches = re.findall(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
@@ -259,6 +281,49 @@ class WordPressModule(BaseModule):
         
         slugs_to_fetch = plugin_slugs.copy()
         
+        # ═══ 2. .pot (Project-Id-Version) ═══
+        # On va chercher d'abord les versions depuis readme.txt et .pot
+        # (le code actuel gère déjà cela via _wp_fetch_version_txt)
+        
+        for slug in plugin_slugs:
+            ver = None
+            
+            # 1. Essayer readme.txt (via _wp_fetch_version_txt)
+            ver = self._wp_fetch_version_txt(slug)
+            
+            # 2. Essayer depuis le HTML (?ver=)
+            if not ver:
+                ver = self._wp_ver_from_html(html, slug, "plugin", self.version)
+            
+            # 3. WPML : fallback sur wpml-dependencies.json
+            if not ver and ("wpml" in slug.lower() or "sitepress" in slug.lower() or "multilingual" in slug.lower()):
+                ver = self._fetch_wpml_version(slug)
+            
+            # 4. Meta tag / commentaire
+            if not ver:
+                if slug in self._plugin_versions_from_meta:
+                    ver = self._plugin_versions_from_meta[slug]
+                elif slug in self._plugin_versions_from_comment:
+                    ver = self._plugin_versions_from_comment[slug]
+            
+            plugin_versions[slug] = ver
+        
+        # ═══ Affichage ═══
+        section("Plugins")
+        if not plugin_slugs:
+            warn("No plugins detected")
+        for slug in plugin_slugs:
+            ver = plugin_versions.get(slug, "")
+            print(f"  {C.WHITE}{C.BOLD}{slug}{C.RST}  {C.DIM}{ver or '?'}{C.RST}")
+            if ver:
+                vulns = self._wp_vuln_from_file(self._ensure_wp_vuln(slug, "plugin"), ver)
+                for v in vulns:
+                    v.package = f"plugin:{slug}"
+                    self.result.vulns.append(v)
+                    print_vuln(v)
+        
+        return plugin_versions
+            
         def fetch_version(slug):
             try:
                 ver = self._wp_fetch_version_txt(slug)
