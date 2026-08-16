@@ -68,6 +68,41 @@ class WordPressModule(BaseModule):
 
         return None
 
+
+    def _get_revslider_version(self):
+        """
+        Extrait la version de Slider Revolution depuis release_log.html.
+        Exemple : <h3 class="version-number">Version 7.1.4 (17th July 2026)</h3>
+        """
+        paths = [
+            "/wp-content/plugins/revslider/release_log.html",
+            "/content/plugins/revslider/release_log.html",
+            "/app/plugins/revslider/release_log.html",
+        ]
+        for path in paths:
+            url = self.base + path
+            try:
+                r = get(url, timeout=3)
+                if r and r.status_code == 200:
+                    # Recherche du pattern dans le HTML
+                    m = re.search(r'<h3[^>]*class="version-number"[^>]*>Version\s+([\d.]+)', r.text, re.I)
+                    if m:
+                        version = m.group(1)
+                        if VERBOSE:
+                            print(f"[VERBOSE] RevSlider version from release_log.html: {version}")
+                        return version
+                    # Fallback : recherche plus large
+                    m = re.search(r'Version\s+([\d.]+)', r.text, re.I)
+                    if m:
+                        version = m.group(1)
+                        if VERBOSE:
+                            print(f"[VERBOSE] RevSlider version from release_log.html (fallback): {version}")
+                        return version
+            except:
+                pass
+        return ""
+
+
     def _core_version_from_assets(self):
         """Dernier fallback : méthode WPScan (Query Parameter In Install Page)."""
         if VERBOSE:
@@ -289,6 +324,14 @@ class WordPressModule(BaseModule):
                 if VERBOSE:
                     print(f"[VERBOSE] Version from .pot: {slug} {ver}")
                 continue
+
+            # --- Cas particulier : Slider Revolution (revslider) ---
+            if 'revslider' in plugin_slugs and 'revslider' not in plugin_versions:
+                rev_ver = self._get_revslider_version()
+                if rev_ver:
+                    plugin_versions['revslider'] = rev_ver
+                    if VERBOSE:
+                        print(f"[VERBOSE] RevSlider version from release_log.html: {rev_ver}")
 
             # 3. Meta / commentaire (déjà filtré)
             if slug in self._plugin_versions_from_meta:
