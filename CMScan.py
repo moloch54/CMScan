@@ -145,7 +145,7 @@ def needs_wp_vuln_update():
         with open(WP_LAST_UPDATE_FILE, "r") as f:
             last_str = f.read().strip()
         last_date = datetime.datetime.strptime(last_str, "%Y-%m-%d").date()
-        return (datetime.date.today() - last_date).days > 7
+        return (datetime.date.today() - last_date).days > 1
     except Exception:
         return True
 
@@ -211,7 +211,7 @@ try:
     with open("version.txt", "r") as f:
         VERSION = f.read().strip()
 except:
-    VERSION = "4.0.3"
+    VERSION = "4.0.4"
 
 BANNER = f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
