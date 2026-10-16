@@ -1,6 +1,6 @@
 #!/bin/bash
 # ────────────────────────────────────────────────────────────────
-# CMScan Installer
+# CMScan Installer — compatible Linux / macOS / WSL
 # Usage: ./install.sh
 # ────────────────────────────────────────────────────────────────
 
@@ -18,11 +18,25 @@ echo -e "${CYAN}${BOLD}║         CMScan — Installation automatique          
 echo -e "${CYAN}${BOLD}╚══════════════════════════════════════════════════════════╝${RESET}"
 echo ""
 
+# ── Détection de l'OS ──────────────────────────────────────────
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    OS="macos"
+    INSTALL_CMD="brew install"
+else
+    OS="linux"
+    INSTALL_CMD="sudo apt install -y"
+fi
+echo -e "${CYAN}[*]${RESET} Système détecté : ${YELLOW}${OS}${RESET}"
+
 # ── Vérification de Python ──────────────────────────────────────
 echo -e "${CYAN}[*]${RESET} Vérification de Python..."
 if ! command -v python3 &> /dev/null; then
     echo -e "${RED}[!]${RESET} Python3 n'est pas installé."
-    echo -e "    ${YELLOW}sudo apt install python3 python3-venv python3-pip${RESET}"
+    if [[ "$OS" == "macos" ]]; then
+        echo -e "    ${YELLOW}brew install python3${RESET}"
+    else
+        echo -e "    ${YELLOW}sudo apt install python3 python3-venv python3-pip${RESET}"
+    fi
     exit 1
 fi
 echo -e "${GREEN}[+]${RESET} Python $(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")') détecté"
@@ -31,7 +45,11 @@ echo -e "${GREEN}[+]${RESET} Python $(python3 -c 'import sys; print(f"{sys.versi
 echo -e "${CYAN}[*]${RESET} Vérification de pip..."
 if ! command -v pip3 &> /dev/null; then
     echo -e "${YELLOW}[!]${RESET} pip3 non trouvé, installation..."
-    sudo apt install -y python3-pip
+    if [[ "$OS" == "macos" ]]; then
+        python3 -m ensurepip --upgrade
+    else
+        $INSTALL_CMD python3-pip
+    fi
 fi
 echo -e "${GREEN}[+]${RESET} pip3 disponible"
 
@@ -39,7 +57,11 @@ echo -e "${GREEN}[+]${RESET} pip3 disponible"
 echo -e "${CYAN}[*]${RESET} Vérification de git..."
 if ! command -v git &> /dev/null; then
     echo -e "${YELLOW}[!]${RESET} git non trouvé, installation..."
-    sudo apt install -y git
+    if [[ "$OS" == "macos" ]]; then
+        brew install git
+    else
+        $INSTALL_CMD git
+    fi
 fi
 echo -e "${GREEN}[+]${RESET} git disponible"
 
@@ -69,11 +91,21 @@ for dep in "${DEPS[@]}"; do
 done
 echo -e "${GREEN}[+]${RESET} Dépendances installées"
 
-# ── Rendre CMScan.py exécutable ─────────────────────────────────
+# ── Rendre CMScan.py exécutable + créer l'alias ─────────────────
 if [ -f "CMScan.py" ]; then
     chmod +x CMScan.py
     echo -e "${GREEN}[+]${RESET} CMScan.py rendu exécutable"
-    ln -sf CMScan.py cmscan.py
+
+    # Supprimer tout ancien alias cassé
+    rm -f cmscan.py
+
+    if [[ "$OS" == "macos" ]]; then
+        # macOS (BSD ln) : -h empêche de suivre le lien existant
+        ln -sh CMScan.py cmscan.py
+    else
+        # Linux / WSL (GNU ln)
+        ln -sf CMScan.py cmscan.py
+    fi
     echo -e "${GREEN}[+]${RESET} Lien créé : cmscan.py -> CMScan.py"
 else
     echo -e "${RED}[!]${RESET} CMScan.py non trouvé !"
